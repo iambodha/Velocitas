@@ -179,3 +179,4 @@ database
 logfile
 *.txt
 prompts.py
+old
