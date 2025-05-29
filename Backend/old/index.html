@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Velocitas Gmail Client</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #333;
+        }
+        .login-section, .email-section {
+            margin: 20px 0;
+        }
+        .user-info {
+            background: #e8f5e8;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .email-list {
+            max-height: 600px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .email-item {
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .email-item:hover {
+            background-color: #f9f9f9;
+        }
+        .email-item:last-child {
+            border-bottom: none;
+        }
+        .email-subject {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .email-from {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 3px;
+        }
+        .email-date {
+            color: #999;
+            font-size: 0.8em;
+        }
+        .email-snippet {
+            color: #777;
+            font-size: 0.9em;
+            margin-top: 8px;
+            font-style: italic;
+        }
+        button {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.2s;
+        }
+        button:hover {
+            background: #3367d6;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .controls {
+            margin: 20px 0;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        input[type="number"], input[type="text"] {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 100px;
+        }
+        .loading {
+            text-align: center;
+            color: #666;
+            padding: 20px;
+        }
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .hidden {
+            display: none;
+        }
+        .email-detail {
+            background: #f9f9f9;
+            padding: 20px;
+            border-radius: 5px;
+            margin-top: 10px;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 Velocitas Gmail Client</h1>
+            <p>Secure Gmail access with OAuth 2.0</p>
+        </div>
+
+        <!-- Login Section -->
+        <div id="loginSection" class="login-section">
+            <p>Click the button below to sign in with your Google account and access your Gmail.</p>
+            <button id="loginBtn" onclick="login()">Sign in with Google</button>
+            <div id="loginError" class="error hidden"></div>
+        </div>
+
+        <!-- User Info Section -->
+        <div id="userSection" class="hidden">
+            <div id="userInfo" class="user-info"></div>
+            <button onclick="logout()">Logout</button>
+        </div>
+
+        <!-- Email Section -->
+        <div id="emailSection" class="email-section hidden">
+            <h2>Your Emails</h2>
+            
+            <div class="controls">
+                <label>Max results:</label>
+                <input type="number" id="maxResults" value="10" min="1" max="50">
+                
+                <label>Search:</label>
+                <input type="text" id="searchQuery" placeholder="e.g., from:example@gmail.com">
+                
+                <button onclick="loadEmails()">Refresh</button>
+            </div>
+
+            <div id="emailLoading" class="loading hidden">Loading emails...</div>
+            <div id="emailError" class="error hidden"></div>
+            <div id="emailList" class="email-list"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        let sessionToken = localStorage.getItem('session_token');
+        let currentEmails = [];
+
+        // Check if user is already logged in
+        window.onload = function() {
+            if (sessionToken) {
+                checkAuthStatus();
+            }
+        };
+
+        async function login() {
+            try {
+                document.getElementById('loginBtn').disabled = true;
+                document.getElementById('loginError').classList.add('hidden');
+
+                // Get auth URL
+                const response = await fetch(`${API_BASE}/auth/login`);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Failed to get auth URL');
+                }
+
+                // Redirect to Google OAuth
+                window.location.href = data.auth_url;
+            } catch (error) {
+                console.error('Login error:', error);
+                showError('loginError', error.message);
+                document.getElementById('loginBtn').disabled = false;
+            }
+        }
+
+        async function checkAuthStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/auth/me`, {
+                    headers: {
+                        'Authorization': `Bearer ${sessionToken}`
+                    }
+                });
+
+                if (response.ok) {
+                    const userData = await response.json();
+                    showUserSection(userData);
+                    loadEmails();
+                } else {
+                    // Invalid token, clear it
+                    localStorage.removeItem('session_token');
+                    sessionToken = null;
+                    showLoginSection();
+                }
+            } catch (error) {
+                console.error('Auth check error:', error);
+                localStorage.removeItem('session_token');
+                sessionToken = null;
+                showLoginSection();
+            }
+        }
+
+        function showLoginSection() {
+            document.getElementById('loginSection').classList.remove('hidden');
+            document.getElementById('userSection').classList.add('hidden');
+            document.getElementById('emailSection').classList.add('hidden');
+        }
+
+        function showUserSection(userData) {
+            document.getElementById('loginSection').classList.add('hidden');
+            document.getElementById('userSection').classList.remove('hidden');
+            document.getElementById('emailSection').classList.remove('hidden');
+
+            document.getElementById('userInfo').innerHTML = `
+                <strong>Welcome, ${userData.name}!</strong><br>
+                Email: ${userData.email}
+            `;
+        }
+
+        async function loadEmails() {
+            try {
+                document.getElementById('emailLoading').classList.remove('hidden');
+                document.getElementById('emailError').classList.add('hidden');
+                document.getElementById('emailList').innerHTML = '';
+
+                const maxResults = document.getElementById('maxResults').value || 10;
+                const query = document.getElementById('searchQuery').value.trim();
+
+                let url = `${API_BASE}/gmail/messages?max_results=${maxResults}`;
+                if (query) {
+                    url += `&query=${encodeURIComponent(query)}`;
+                }
+
+                const response = await fetch(url, {
+                    headers: {
+                        'Authorization': `Bearer ${sessionToken}`
+                    }
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Failed to load emails');
+                }
+
+                // Load email details for each message ID
+                currentEmails = [];
+                const emailList = document.getElementById('emailList');
+
+                if (data.message_ids.length === 0) {
+                    emailList.innerHTML = '<div class="loading">No emails found.</div>';
+                    return;
+                }
+
+                for (const messageId of data.message_ids) {
+                    try {
+                        const emailResponse = await fetch(`${API_BASE}/gmail/messages/${messageId}`, {
+                            headers: {
+                                'Authorization': `Bearer ${sessionToken}`
+                            }
+                        });
+
+                        if (emailResponse.ok) {
+                            const emailData = await emailResponse.json();
+                            currentEmails.push(emailData);
+                            displayEmail(emailData);
+                        }
+                    } catch (error) {
+                        console.error(`Error loading email ${messageId}:`, error);
+                    }
+                }
+
+            } catch (error) {
+                console.error('Load emails error:', error);
+                showError('emailError', error.message);
+            } finally {
+                document.getElementById('emailLoading').classList.add('hidden');
+            }
+        }
+
+        function displayEmail(emailData) {
+            const emailList = document.getElementById('emailList');
+            const emailDiv = document.createElement('div');
+            emailDiv.className = 'email-item';
+            emailDiv.onclick = () => toggleEmailDetail(emailData.id);
+
+            emailDiv.innerHTML = `
+                <div class="email-subject">${escapeHtml(emailData.subject || '(No Subject)')}</div>
+                <div class="email-from">From: ${escapeHtml(emailData.from || 'Unknown')}</div>
+                <div class="email-date">${escapeHtml(emailData.date || '')}</div>
+                <div class="email-snippet">${escapeHtml(emailData.snippet || '')}</div>
+                <div id="detail-${emailData.id}" class="email-detail hidden"></div>
+            `;
+
+            emailList.appendChild(emailDiv);
+        }
+
+        function toggleEmailDetail(emailId) {
+            const detailDiv = document.getElementById(`detail-${emailId}`);
+            
+            if (detailDiv.classList.contains('hidden')) {
+                // Show detail - you could load full email body here
+                const email = currentEmails.find(e => e.id === emailId);
+                detailDiv.innerHTML = `
+                    <strong>Email ID:</strong> ${emailId}<br>
+                    <strong>Subject:</strong> ${escapeHtml(email.subject || '(No Subject)')}<br>
+                    <strong>From:</strong> ${escapeHtml(email.from || 'Unknown')}<br>
+                    <strong>Date:</strong> ${escapeHtml(email.date || '')}<br>
+                    <strong>Snippet:</strong> ${escapeHtml(email.snippet || '')}
+                `;
+                detailDiv.classList.remove('hidden');
+            } else {
+                detailDiv.classList.add('hidden');
+            }
+        }
+
+        async function logout() {
+            try {
+                await fetch(`${API_BASE}/auth/logout`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${sessionToken}`
+                    }
+                });
+            } catch (error) {
+                console.error('Logout error:', error);
+            } finally {
+                localStorage.removeItem('session_token');
+                sessionToken = null;
+                currentEmails = [];
+                showLoginSection();
+            }
+        }
+
+        function showError(elementId, message) {
+            const errorDiv = document.getElementById(elementId);
+            errorDiv.textContent = message;
+            errorDiv.classList.remove('hidden');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Handle OAuth callback
+        const urlParams = new URLSearchParams(window.location.search);
+        const code = urlParams.get('code');
+        const state = urlParams.get('state');
+
+        if (code && state) {
+            // This is the OAuth callback
+            fetch(`${API_BASE}/auth/callback?code=${code}&state=${state}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.session_token) {
+                        localStorage.setItem('session_token', data.session_token);
+                        sessionToken = data.session_token;
+                        
+                        // Clean URL and show user section
+                        window.history.replaceState({}, document.title, window.location.pathname);
+                        showUserSection(data.user);
+                        loadEmails();
+                    } else {
+                        throw new Error(data.detail || 'Authentication failed');
+                    }
+                })
+                .catch(error => {
+                    console.error('Callback error:', error);
+                    showError('loginError', error.message);
+                    showLoginSection();
+                });
+        }
+    </script>
+</body>
+</html>
