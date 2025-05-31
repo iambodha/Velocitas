@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi import FastAPI, Request, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -17,7 +17,15 @@ import redis
 import jwt
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
-import hashlib
+
+# Database imports
+from sqlalchemy import create_engine, Column, String, Text, DateTime, Integer, Boolean, Index, text
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.exc import IntegrityError
+import bcrypt
+from contextlib import contextmanager
 
 # Load environment variables
 load_dotenv()
@@ -26,9 +34,9 @@ load_dotenv()
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app = FastAPI(
-    title="Multi-User Gmail API",
-    description="Gmail API with support for multiple users and concurrent requests with Redis email storage",
-    version="1.0.0"
+    title="Multi-User Gmail API with PostgreSQL",
+    description="Gmail API with PostgreSQL storage, user management, and email persistence",
+    version="2.0.0"
 )
 
 # Add CORS middleware
@@ -51,27 +59,131 @@ SCOPES = [
 JWT_SECRET = os.getenv('JWT_SECRET', 'your-secret-key-change-in-production')
 JWT_ALGORITHM = 'HS256'
 
-# Redis configuration
+# Database Configuration
+DATABASE_URL = os.getenv(
+    'DATABASE_URL', 
+    'postgresql://username:password@localhost:5432/gmail_api_db'
+)
+
+# Redis configuration (keeping for session management)
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
 
-# Cache TTL settings
-EMAIL_LIST_TTL = int(os.getenv('EMAIL_LIST_TTL', 300))  # 5 minutes
-EMAIL_CONTENT_TTL = int(os.getenv('EMAIL_CONTENT_TTL', 3600))  # 1 hour
-CREDENTIALS_TTL = int(os.getenv('CREDENTIALS_TTL', 86400))  # 24 hours
-
 # Thread pool for handling Gmail API calls
 executor = ThreadPoolExecutor(max_workers=10)
 
-# Fallback in-memory storage
-user_credentials: Dict[str, dict] = {}
-pending_auth: Dict[str, str] = {}  # state -> session_id
-email_cache: Dict[str, List[dict]] = {}  # user_id -> emails
-email_content_cache: Dict[str, dict] = {}  # email_key -> email_content
+# Database Setup
+Base = declarative_base()
 
-# Initialize Redis client
+class User(Base):
+    """User model with secure credential storage"""
+    __tablename__ = 'users'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    google_user_id = Column(String(255), unique=True, nullable=False, index=True)
+    email = Column(String(255), nullable=False, index=True)
+    name = Column(String(255), nullable=True)
+    
+    # Encrypted credential storage
+    encrypted_credentials = Column(Text, nullable=True)
+    credentials_updated_at = Column(DateTime, nullable=True)
+    
+    # User metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_login = Column(DateTime, nullable=True)
+    is_active = Column(Boolean, default=True)
+    
+    # Add indexes for performance
+    __table_args__ = (
+        Index('idx_user_google_id', 'google_user_id'),
+        Index('idx_user_email', 'email'),
+        Index('idx_user_active', 'is_active'),
+    )
+
+class Email(Base):
+    """Email model for storing Gmail messages"""
+    __tablename__ = 'emails'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    gmail_message_id = Column(String(255), nullable=False, index=True)
+    
+    # Email content
+    subject = Column(Text, nullable=True)
+    sender = Column(String(500), nullable=True)
+    recipient = Column(String(500), nullable=True)
+    date_sent = Column(DateTime, nullable=True)
+    
+    # Email body (can be large)
+    body_text = Column(Text, nullable=True)
+    body_html = Column(Text, nullable=True)
+    snippet = Column(Text, nullable=True)
+    
+    # Gmail metadata stored as JSON
+    gmail_metadata = Column(JSONB, nullable=True)
+    
+    # Processing metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    is_read = Column(Boolean, default=False)
+    
+    # Composite indexes for efficient queries
+    __table_args__ = (
+        Index('idx_email_user_gmail_id', 'user_id', 'gmail_message_id', unique=True),
+        Index('idx_email_user_date', 'user_id', 'date_sent'),
+        Index('idx_email_user_read', 'user_id', 'is_read'),
+        Index('idx_email_sender', 'sender'),
+    )
+
+# Database engine and session
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=10,
+    max_overflow=20,
+    pool_recycle=3600,
+    pool_pre_ping=True,
+    echo=False  # Set to True for SQL debugging
+)
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Create tables
+def create_tables():
+    """Create database tables if they don't exist"""
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("✅ Database tables created successfully")
+    except Exception as e:
+        print(f"❌ Error creating database tables: {e}")
+
+# Initialize database
+create_tables()
+
+# Database dependency
+@contextmanager
+def get_db():
+    """Database session context manager"""
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise e
+    finally:
+        db.close()
+
+def get_db_session():
+    """FastAPI dependency for database session"""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# Initialize Redis client (keeping for caching)
 def create_redis_client():
     """Create Redis client with error handling"""
     try:
@@ -85,277 +197,250 @@ def create_redis_client():
             socket_timeout=5,
             health_check_interval=30
         )
-        # Test connection
         client.ping()
         print("✅ Redis connection successful")
         return client
     except redis.ConnectionError:
-        print("❌ Redis connection failed - using in-memory storage")
+        print("❌ Redis connection failed - caching disabled")
         return None
 
 redis_client = create_redis_client()
 
-class CredentialManager:
-    """Enhanced credential manager with Redis support and email storage"""
+class SecureCredentialManager:
+    """Secure credential manager with PostgreSQL storage"""
     
-    def __init__(self, redis_client=None):
-        self.redis = redis_client
+    def __init__(self, encryption_key: str = None):
+        self.encryption_key = encryption_key or JWT_SECRET
     
-    def save_credentials(self, user_id: str, creds: Credentials):
-        """Save credentials with Redis persistence"""
-        creds_dict = {
-            'token': creds.token,
-            'refresh_token': creds.refresh_token,
-            'token_uri': creds.token_uri,
-            'client_id': creds.client_id,
-            'client_secret': creds.client_secret,
-            'scopes': creds.scopes,
-            'updated_at': datetime.utcnow().isoformat()
-        }
-        
-        if self.redis:
-            try:
-                # Store in Redis with configurable expiration
-                self.redis.setex(
-                    f"creds:{user_id}", 
-                    CREDENTIALS_TTL, 
-                    json.dumps(creds_dict)
+    def _encrypt_credentials(self, creds_dict: dict) -> str:
+        """Encrypt credentials before storage"""
+        import cryptography.fernet
+        key = base64.urlsafe_b64encode(self.encryption_key.ljust(32)[:32].encode())
+        f = cryptography.fernet.Fernet(key)
+        return f.encrypt(json.dumps(creds_dict).encode()).decode()
+    
+    def _decrypt_credentials(self, encrypted_creds: str) -> dict:
+        """Decrypt stored credentials"""
+        import cryptography.fernet
+        key = base64.urlsafe_b64encode(self.encryption_key.ljust(32)[:32].encode())
+        f = cryptography.fernet.Fernet(key)
+        return json.loads(f.decrypt(encrypted_creds.encode()).decode())
+    
+    def save_user_and_credentials(self, google_user_id: str, email: str, name: str, creds: Credentials):
+        """Save or update user and their credentials securely"""
+        with get_db() as db:
+            # Check if user exists
+            user = db.query(User).filter(User.google_user_id == google_user_id).first()
+            
+            # Prepare credentials dict
+            creds_dict = {
+                'token': creds.token,
+                'refresh_token': creds.refresh_token,
+                'token_uri': creds.token_uri,
+                'client_id': creds.client_id,
+                'client_secret': creds.client_secret,
+                'scopes': creds.scopes,
+                'updated_at': datetime.utcnow().isoformat()
+            }
+            
+            encrypted_creds = self._encrypt_credentials(creds_dict)
+            
+            if user:
+                # Update existing user
+                user.email = email
+                user.name = name
+                user.encrypted_credentials = encrypted_creds
+                user.credentials_updated_at = datetime.utcnow()
+                user.last_login = datetime.utcnow()
+                user.is_active = True
+            else:
+                # Create new user
+                user = User(
+                    google_user_id=google_user_id,
+                    email=email,
+                    name=name,
+                    encrypted_credentials=encrypted_creds,
+                    credentials_updated_at=datetime.utcnow(),
+                    last_login=datetime.utcnow()
                 )
-                print(f"✅ Saved credentials for user {user_id} to Redis")
-            except Exception as e:
-                print(f"Redis save error: {e}, falling back to memory")
-                user_credentials[user_id] = creds_dict
-        else:
-            # Fallback to in-memory
-            user_credentials[user_id] = creds_dict
+                db.add(user)
+            
+            db.flush()
+            return str(user.id)
     
     def load_credentials(self, user_id: str) -> Optional[Credentials]:
-        """Load credentials from Redis or memory"""
-        creds_data = None
-        
-        if self.redis:
-            try:
-                # Load from Redis
-                data = self.redis.get(f"creds:{user_id}")
-                if data:
-                    creds_data = json.loads(data)
-            except Exception as e:
-                print(f"Redis load error: {e}, trying memory")
-                creds_data = user_credentials.get(user_id)
-        else:
-            # Fallback to in-memory
-            creds_data = user_credentials.get(user_id)
-        
-        if not creds_data:
-            return None
-        
-        try:
-            creds = Credentials(
-                token=creds_data['token'],
-                refresh_token=creds_data.get('refresh_token'),
-                token_uri=creds_data['token_uri'],
-                client_id=creds_data['client_id'],
-                client_secret=creds_data['client_secret'],
-                scopes=creds_data['scopes']
-            )
+        """Load and decrypt user credentials"""
+        with get_db() as db:
+            user = db.query(User).filter(
+                User.id == user_id,
+                User.is_active == True
+            ).first()
             
-            # Refresh if expired
-            if creds.expired and creds.refresh_token:
-                creds.refresh(GoogleRequest())
-                self.save_credentials(user_id, creds)
+            if not user or not user.encrypted_credentials:
+                return None
             
-            return creds
-        except Exception as e:
-            print(f"Error loading credentials for user {user_id}: {e}")
-            return None
-    
-    def delete_credentials(self, user_id: str):
-        """Delete credentials and all associated email data"""
-        if self.redis:
             try:
-                # Delete credentials
-                self.redis.delete(f"creds:{user_id}")
-                # Delete all email lists for this user
-                self.redis.delete(f"emails:list:{user_id}")
-                # Delete individual email cache entries
-                email_keys = self.redis.keys(f"emails:content:{user_id}:*")
-                if email_keys:
-                    self.redis.delete(*email_keys)
-                print(f"✅ Deleted all data for user {user_id} from Redis")
-            except Exception as e:
-                print(f"Redis delete error: {e}")
-        
-        # Clean up memory fallbacks
-        user_credentials.pop(user_id, None)
-        email_cache.pop(user_id, None)
-        # Clean up email content cache
-        keys_to_remove = [k for k in email_content_cache.keys() if k.startswith(f"{user_id}:")]
-        for key in keys_to_remove:
-            email_content_cache.pop(key, None)
-    
-    def get_active_users(self) -> List[str]:
-        """Get list of users with stored credentials"""
-        active_users = set()
-        
-        if self.redis:
-            try:
-                keys = self.redis.keys("creds:*")
-                redis_users = [key.replace("creds:", "") for key in keys]
-                active_users.update(redis_users)
-            except Exception as e:
-                print(f"Redis keys error: {e}")
-        
-        # Also check memory
-        active_users.update(user_credentials.keys())
-        
-        return list(active_users)
-    
-    def cache_email_list(self, user_id: str, emails: List[dict], ttl: int = EMAIL_LIST_TTL):
-        """Cache email list with configurable TTL"""
-        cache_data = {
-            'emails': emails,
-            'cached_at': datetime.utcnow().isoformat(),
-            'count': len(emails)
-        }
-        
-        if self.redis:
-            try:
-                self.redis.setex(
-                    f"emails:list:{user_id}", 
-                    ttl, 
-                    json.dumps(cache_data)
+                creds_data = self._decrypt_credentials(user.encrypted_credentials)
+                
+                creds = Credentials(
+                    token=creds_data['token'],
+                    refresh_token=creds_data.get('refresh_token'),
+                    token_uri=creds_data['token_uri'],
+                    client_id=creds_data['client_id'],
+                    client_secret=creds_data['client_secret'],
+                    scopes=creds_data['scopes']
                 )
-                print(f"✅ Cached {len(emails)} emails for user {user_id} (TTL: {ttl}s)")
+                
+                # Refresh if expired
+                if creds.expired and creds.refresh_token:
+                    creds.refresh(GoogleRequest())
+                    self.update_credentials(user_id, creds)
+                
+                return creds
             except Exception as e:
-                print(f"Cache email list error: {e}")
-                # Fallback to memory
-                email_cache[user_id] = emails
-        else:
-            # Fallback to in-memory
-            email_cache[user_id] = emails
+                print(f"Error loading credentials for user {user_id}: {e}")
+                return None
     
-    def get_cached_email_list(self, user_id: str) -> Optional[Dict]:
-        """Get cached email list with metadata"""
-        if self.redis:
-            try:
-                data = self.redis.get(f"emails:list:{user_id}")
-                if data:
-                    cache_data = json.loads(data)
-                    return cache_data
-            except Exception as e:
-                print(f"Get cached email list error: {e}")
-                # Try memory fallback
-                emails = email_cache.get(user_id)
-                if emails:
-                    return {
-                        'emails': emails,
-                        'cached_at': datetime.utcnow().isoformat(),
-                        'count': len(emails)
-                    }
-        else:
-            # Memory fallback
-            emails = email_cache.get(user_id)
-            if emails:
-                return {
-                    'emails': emails,
-                    'cached_at': datetime.utcnow().isoformat(),
-                    'count': len(emails)
+    def update_credentials(self, user_id: str, creds: Credentials):
+        """Update existing user credentials"""
+        with get_db() as db:
+            user = db.query(User).filter(User.id == user_id).first()
+            if user:
+                creds_dict = {
+                    'token': creds.token,
+                    'refresh_token': creds.refresh_token,
+                    'token_uri': creds.token_uri,
+                    'client_id': creds.client_id,
+                    'client_secret': creds.client_secret,
+                    'scopes': creds.scopes,
+                    'updated_at': datetime.utcnow().isoformat()
                 }
-        return None
+                user.encrypted_credentials = self._encrypt_credentials(creds_dict)
+                user.credentials_updated_at = datetime.utcnow()
     
-    def cache_email_content(self, user_id: str, email_id: str, email_data: dict, ttl: int = EMAIL_CONTENT_TTL):
-        """Cache individual email content"""
-        cache_key = f"emails:content:{user_id}:{email_id}"
-        cache_data = {
-            **email_data,
-            'cached_at': datetime.utcnow().isoformat()
-        }
-        
-        if self.redis:
-            try:
-                self.redis.setex(
-                    cache_key,
-                    ttl,
-                    json.dumps(cache_data)
-                )
-                print(f"✅ Cached email {email_id} for user {user_id} (TTL: {ttl}s)")
-            except Exception as e:
-                print(f"Cache email content error: {e}")
-                # Fallback to memory
-                email_content_cache[f"{user_id}:{email_id}"] = cache_data
-        else:
-            # Fallback to in-memory
-            email_content_cache[f"{user_id}:{email_id}"] = cache_data
+    def get_user_by_google_id(self, google_user_id: str) -> Optional[User]:
+        """Get user by Google ID"""
+        with get_db() as db:
+            return db.query(User).filter(
+                User.google_user_id == google_user_id,
+                User.is_active == True
+            ).first()
     
-    def get_cached_email_content(self, user_id: str, email_id: str) -> Optional[dict]:
-        """Get cached email content"""
-        cache_key = f"emails:content:{user_id}:{email_id}"
-        
-        if self.redis:
-            try:
-                data = self.redis.get(cache_key)
-                if data:
-                    return json.loads(data)
-            except Exception as e:
-                print(f"Get cached email content error: {e}")
-                # Try memory fallback
-                return email_content_cache.get(f"{user_id}:{email_id}")
-        else:
-            # Memory fallback
-            return email_content_cache.get(f"{user_id}:{email_id}")
-        
-        return None
-    
-    def get_cache_stats(self, user_id: str) -> dict:
-        """Get cache statistics for a user"""
-        stats = {
-            'email_lists': 0,
-            'email_contents': 0,
-            'total_cached_emails': 0
-        }
-        
-        if self.redis:
-            try:
-                # Check email list cache
-                if self.redis.exists(f"emails:list:{user_id}"):
-                    stats['email_lists'] = 1
-                    list_data = self.redis.get(f"emails:list:{user_id}")
-                    if list_data:
-                        cache_data = json.loads(list_data)
-                        stats['total_cached_emails'] = cache_data.get('count', 0)
-                
-                # Count email content caches
-                content_keys = self.redis.keys(f"emails:content:{user_id}:*")
-                stats['email_contents'] = len(content_keys)
-                
-            except Exception as e:
-                print(f"Get cache stats error: {e}")
-        
-        return stats
-    
-    def clear_user_cache(self, user_id: str):
-        """Clear all cached data for a user"""
-        if self.redis:
-            try:
-                # Clear email list cache
-                self.redis.delete(f"emails:list:{user_id}")
-                # Clear email content cache
-                content_keys = self.redis.keys(f"emails:content:{user_id}:*")
-                if content_keys:
-                    self.redis.delete(*content_keys)
-                print(f"✅ Cleared all cache for user {user_id}")
-            except Exception as e:
-                print(f"Clear cache error: {e}")
-        
-        # Clear memory fallbacks
-        email_cache.pop(user_id, None)
-        keys_to_remove = [k for k in email_content_cache.keys() if k.startswith(f"{user_id}:")]
-        for key in keys_to_remove:
-            email_content_cache.pop(key, None)
+    def deactivate_user(self, user_id: str):
+        """Deactivate user instead of deleting"""
+        with get_db() as db:
+            user = db.query(User).filter(User.id == user_id).first()
+            if user:
+                user.is_active = False
+                user.encrypted_credentials = None
 
-# Initialize credential manager
-credential_manager = CredentialManager(redis_client)
+class EmailManager:
+    """Manage email storage in PostgreSQL"""
+    
+    def save_emails(self, user_id: str, emails: List[dict]):
+        """Save emails to database, avoiding duplicates"""
+        with get_db() as db:
+            saved_count = 0
+            for email_data in emails:
+                try:
+                    # Check if email already exists
+                    existing = db.query(Email).filter(
+                        Email.user_id == user_id,
+                        Email.gmail_message_id == email_data['id']
+                    ).first()
+                    
+                    if not existing:
+                        # Parse date
+                        date_sent = None
+                        if email_data.get('date'):
+                            try:
+                                from email.utils import parsedate_to_datetime
+                                date_sent = parsedate_to_datetime(email_data['date'])
+                            except:
+                                pass
+                        
+                        email = Email(
+                            user_id=user_id,
+                            gmail_message_id=email_data['id'],
+                            subject=email_data.get('subject'),
+                            sender=email_data.get('sender'),
+                            recipient=email_data.get('to'),
+                            date_sent=date_sent,
+                            body_text=email_data.get('body'),
+                            snippet=email_data.get('snippet'),
+                            gmail_metadata=email_data
+                        )
+                        db.add(email)
+                        saved_count += 1
+                
+                except IntegrityError:
+                    # Skip duplicate emails
+                    db.rollback()
+                    continue
+                except Exception as e:
+                    print(f"Error saving email {email_data.get('id')}: {e}")
+                    continue
+            
+            return saved_count
+    
+    def get_user_emails(self, user_id: str, limit: int = 50, offset: int = 0) -> List[Email]:
+        """Get user emails from database"""
+        with get_db() as db:
+            return db.query(Email).filter(
+                Email.user_id == user_id
+            ).order_by(
+                Email.date_sent.desc().nullslast()
+            ).offset(offset).limit(limit).all()
+    
+    def get_email_by_gmail_id(self, user_id: str, gmail_message_id: str) -> Optional[Email]:
+        """Get specific email by Gmail message ID"""
+        with get_db() as db:
+            return db.query(Email).filter(
+                Email.user_id == user_id,
+                Email.gmail_message_id == gmail_message_id
+            ).first()
+    
+    def search_emails(self, user_id: str, query: str, limit: int = 20) -> List[Email]:
+        """Search emails by subject or sender"""
+        with get_db() as db:
+            return db.query(Email).filter(
+                Email.user_id == user_id,
+                (Email.subject.ilike(f'%{query}%') | 
+                 Email.sender.ilike(f'%{query}%'))
+            ).order_by(
+                Email.date_sent.desc().nullslast()
+            ).limit(limit).all()
+    
+    def get_email_stats(self, user_id: str) -> dict:
+        """Get email statistics for user"""
+        with get_db() as db:
+            total = db.query(Email).filter(Email.user_id == user_id).count()
+            unread = db.query(Email).filter(
+                Email.user_id == user_id,
+                Email.is_read == False
+            ).count()
+            
+            # Top senders
+            top_senders = db.execute(text("""
+                SELECT sender, COUNT(*) as email_count
+                FROM emails 
+                WHERE user_id = :user_id AND sender IS NOT NULL
+                GROUP BY sender 
+                ORDER BY email_count DESC 
+                LIMIT 10
+            """), {"user_id": user_id}).fetchall()
+            
+            return {
+                "total_emails": total,
+                "unread_emails": unread,
+                "top_senders": [{"sender": row.sender, "count": row.email_count} for row in top_senders]
+            }
 
+# Initialize managers
+credential_manager = SecureCredentialManager()
+email_manager = EmailManager()
+
+# Authentication functions
 def create_session_token(user_id: str) -> str:
     """Create JWT session token"""
     payload = {
@@ -399,19 +484,26 @@ async def gmail_api_call(func, *args, **kwargs):
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(executor, func, *args, **kwargs)
 
+# Fallback in-memory storage for pending auth
+pending_auth: Dict[str, str] = {}
+
 # API Endpoints
 
 @app.get("/")
 async def root():
     """Root endpoint"""
+    with get_db() as db:
+        user_count = db.query(User).filter(User.is_active == True).count()
+        email_count = db.query(Email).count()
+    
     return {
-        "message": "Multi-User Gmail API with Redis Email Storage", 
-        "version": "1.0.0",
+        "message": "Multi-User Gmail API with PostgreSQL", 
+        "version": "2.0.0",
+        "database": "PostgreSQL",
         "redis_connected": redis_client is not None,
-        "cache_ttl": {
-            "email_list": EMAIL_LIST_TTL,
-            "email_content": EMAIL_CONTENT_TTL,
-            "credentials": CREDENTIALS_TTL
+        "stats": {
+            "active_users": user_count,
+            "total_emails": email_count
         }
     }
 
@@ -425,10 +517,22 @@ async def health_check():
         except:
             redis_status = "error"
     
+    # Test database connection
+    db_status = "connected"
+    try:
+        with get_db() as db:
+            db.execute(text("SELECT 1"))
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+    
+    with get_db() as db:
+        active_users = db.query(User).filter(User.is_active == True).count()
+    
     return {
         "status": "healthy",
+        "database": db_status,
         "redis": redis_status,
-        "active_users": len(credential_manager.get_active_users())
+        "active_users": active_users
     }
 
 @app.get("/auth")
@@ -470,11 +574,14 @@ async def callback(request: Request):
         # Get user info from Google
         service = build('oauth2', 'v2', credentials=credentials)
         user_info = service.userinfo().get().execute()
-        user_id = user_info['id']
+        google_user_id = user_info['id']
         user_email = user_info.get('email', 'unknown')
+        user_name = user_info.get('name', '')
         
-        # Save credentials for this user
-        credential_manager.save_credentials(user_id, credentials)
+        # Save user and credentials to database
+        user_id = credential_manager.save_user_and_credentials(
+            google_user_id, user_email, user_name, credentials
+        )
         
         # Create session token
         session_token = create_session_token(user_id)
@@ -597,55 +704,73 @@ async def callback(request: Request):
 async def status(user_id: str = Depends(get_current_user)):
     """Check authentication status for current user"""
     creds = credential_manager.load_credentials(user_id)
-    cache_stats = credential_manager.get_cache_stats(user_id)
     
-    if creds and creds.valid:
+    with get_db() as db:
+        user = db.query(User).filter(User.id == user_id).first()
+    
+    if creds and creds.valid and user:
         return {
             "authenticated": True, 
             "message": "Ready to access Gmail", 
             "user_id": user_id,
-            "cache_stats": cache_stats
+            "email": user.email,
+            "name": user.name
         }
     else:
         return {
             "authenticated": False, 
             "message": "Not authenticated", 
-            "user_id": user_id,
-            "cache_stats": cache_stats
+            "user_id": user_id
         }
 
 @app.post("/logout")
 async def logout(user_id: str = Depends(get_current_user)):
     """Logout current user and clear credentials"""
-    credential_manager.delete_credentials(user_id)
+    credential_manager.deactivate_user(user_id)
     return {"success": True, "message": "Logged out successfully"}
 
 @app.get("/emails")
 async def get_emails(
-    limit: int = 10, 
-    use_cache: bool = True,
-    force_refresh: bool = False,
+    limit: int = Query(default=20, le=100),
+    offset: int = Query(default=0, ge=0),
+    sync_new: bool = Query(default=False),
     user_id: str = Depends(get_current_user)
 ):
-    """Get list of emails for current user with enhanced caching"""
+    """Get emails from database with option to sync new emails from Gmail"""
     
-    # Check cache first (unless force refresh is requested)
-    if use_cache and not force_refresh:
-        cached_data = credential_manager.get_cached_email_list(user_id)
-        if cached_data:
-            return {
-                "emails": cached_data['emails'], 
-                "user_id": user_id, 
-                "cached": True,
-                "cached_at": cached_data['cached_at'],
-                "count": cached_data['count'],
-                "source": "redis" if redis_client else "memory"
-            }
+    if sync_new:
+        # Sync new emails from Gmail API
+        await sync_emails_from_gmail(user_id, limit)
     
-    # Load credentials
+    # Get emails from database
+    emails = email_manager.get_user_emails(user_id, limit, offset)
+    
+    email_list = []
+    for email in emails:
+        email_list.append({
+            'id': email.gmail_message_id,
+            'subject': email.subject,
+            'sender': email.sender,
+            'recipient': email.recipient,
+            'date': email.date_sent.isoformat() if email.date_sent else None,
+            'snippet': email.snippet,
+            'is_read': email.is_read,
+            'stored_at': email.created_at.isoformat()
+        })
+    
+    return {
+        "emails": email_list,
+        "user_id": user_id,
+        "count": len(email_list),
+        "offset": offset,
+        "limit": limit
+    }
+
+async def sync_emails_from_gmail(user_id: str, limit: int = 20):
+    """Sync emails from Gmail API to database"""
     creds = credential_manager.load_credentials(user_id)
     if not creds or not creds.valid:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        return
     
     try:
         def fetch_emails():
@@ -673,14 +798,38 @@ async def get_emails(
                     subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
                     sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown Sender')
                     date = next((h['value'] for h in headers if h['name'] == 'Date'), 'Unknown Date')
+                    to = next((h['value'] for h in headers if h['name'] == 'To'), 'Unknown Recipient')
+                    
+                    # Extract body
+                    def extract_body(payload):
+                        body = ""
+                        if 'parts' in payload:
+                            for part in payload['parts']:
+                                if part['mimeType'] == 'text/plain':
+                                    if part['body'].get('data'):
+                                        data = part['body']['data']
+                                        body = base64.urlsafe_b64decode(data).decode('utf-8')
+                                        break
+                                elif part['mimeType'] == 'text/html' and not body:
+                                    if part['body'].get('data'):
+                                        data = part['body']['data']
+                                        body = base64.urlsafe_b64decode(data).decode('utf-8')
+                        else:
+                            if payload['body'].get('data'):
+                                body = base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8')
+                        return body
+                    
+                    body = extract_body(msg['payload'])
                     
                     email_list.append({
                         'id': message['id'],
                         'subject': subject,
                         'sender': sender,
+                        'to': to,
                         'date': date,
+                        'body': body,
                         'snippet': msg.get('snippet', ''),
-                        'fetched_at': datetime.utcnow().isoformat()
+                        'gmail_data': msg
                     })
                 except Exception as e:
                     print(f"Error processing message {message['id']}: {e}")
@@ -690,41 +839,45 @@ async def get_emails(
         
         email_list = await gmail_api_call(fetch_emails)
         
-        # Cache the results
+        # Save emails to database
         if email_list:
-            credential_manager.cache_email_list(user_id, email_list)
+            saved_count = email_manager.save_emails(user_id, email_list)
+            print(f"Saved {saved_count} new emails for user {user_id}")
         
-        return {
-            "emails": email_list, 
-            "user_id": user_id, 
-            "cached": False,
-            "fetched_at": datetime.utcnow().isoformat(),
-            "count": len(email_list),
-            "source": "gmail_api"
-        }
-    
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch emails: {str(e)}")
+        print(f"Error syncing emails from Gmail: {e}")
 
 @app.get("/email/{email_id}")
-async def get_email(
-    email_id: str, 
-    use_cache: bool = True,
-    force_refresh: bool = False,
-    user_id: str = Depends(get_current_user)
-):
-    """Get specific email content for current user with caching"""
+async def get_email(email_id: str, user_id: str = Depends(get_current_user)):
+    """Get specific email content from database or Gmail API"""
     
-    # Check cache first (unless force refresh is requested)
-    if use_cache and not force_refresh:
-        cached_email = credential_manager.get_cached_email_content(user_id, email_id)
-        if cached_email:
-            return {
-                **cached_email,
-                "cached": True,
-                "source": "redis" if redis_client else "memory"
-            }
+    # Try to get from database first
+    email = email_manager.get_email_by_gmail_id(user_id, email_id)
     
+    if email:
+        # Mark as read
+        with get_db() as db:
+            db_email = db.query(Email).filter(
+                Email.user_id == user_id,
+                Email.gmail_message_id == email_id
+            ).first()
+            if db_email:
+                db_email.is_read = True
+        
+        return {
+            "id": email.gmail_message_id,
+            "subject": email.subject,
+            "sender": email.sender,
+            "recipient": email.recipient,
+            "date": email.date_sent.isoformat() if email.date_sent else None,
+            "body_text": email.body_text,
+            "body_html": email.body_html,
+            "snippet": email.snippet,
+            "is_read": email.is_read,
+            "source": "database"
+        }
+    
+    # Fallback to Gmail API if not in database
     creds = credential_manager.load_credentials(user_id)
     if not creds or not creds.valid:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -772,305 +925,310 @@ async def get_email(
                 "id": email_id,
                 "subject": subject,
                 "sender": sender,
-                "to": to,
+                "recipient": to,
                 "date": date,
-                "body": body,
+                "body_text": body,
                 "snippet": message.get('snippet', ''),
-                "user_id": user_id,
-                "fetched_at": datetime.utcnow().isoformat()
+                "source": "gmail_api"
             }
         
         email_data = await gmail_api_call(fetch_email)
         
-        # Cache the email content
-        credential_manager.cache_email_content(user_id, email_id, email_data)
+        # Save to database for future use
+        email_manager.save_emails(user_id, [email_data])
         
-        return {
-            **email_data,
-            "cached": False,
-            "source": "gmail_api"
-        }
+        return email_data
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch email: {str(e)}")
 
-# Cache management endpoints
-
-@app.get("/cache/stats")
-async def get_cache_stats(user_id: str = Depends(get_current_user)):
-    """Get cache statistics for current user"""
-    stats = credential_manager.get_cache_stats(user_id)
-    return {
-        "user_id": user_id,
-        "cache_stats": stats,
-        "redis_connected": redis_client is not None
-    }
-
-@app.delete("/cache/clear")
-async def clear_cache(user_id: str = Depends(get_current_user)):
-    """Clear all cached data for current user"""
-    credential_manager.clear_user_cache(user_id)
-    return {
-        "success": True,
-        "message": f"Cache cleared for user {user_id}"
-    }
-
-@app.delete("/cache/emails")
-async def clear_email_cache(user_id: str = Depends(get_current_user)):
-    """Clear only email cache for current user"""
-    if redis_client:
-        try:
-            # Clear email list cache
-            redis_client.delete(f"emails:list:{user_id}")
-            # Clear email content cache
-            content_keys = redis_client.keys(f"emails:content:{user_id}:*")
-            if content_keys:
-                redis_client.delete(*content_keys)
-        except Exception as e:
-            print(f"Redis email cache clear error: {e}")
+@app.get("/emails/search")
+async def search_emails(
+    q: str = Query(..., description="Search query"),
+    limit: int = Query(default=20, le=50),
+    user_id: str = Depends(get_current_user)
+):
+    """Search emails by subject or sender"""
     
-    # Clear memory fallbacks
-    email_cache.pop(user_id, None)
-    keys_to_remove = [k for k in email_content_cache.keys() if k.startswith(f"{user_id}:")]
-    for key in keys_to_remove:
-        email_content_cache.pop(key, None)
+    emails = email_manager.search_emails(user_id, q, limit)
+    
+    email_list = []
+    for email in emails:
+        email_list.append({
+            'id': email.gmail_message_id,
+            'subject': email.subject,
+            'sender': email.sender,
+            'recipient': email.recipient,
+            'date': email.date_sent.isoformat() if email.date_sent else None,
+            'snippet': email.snippet,
+            'is_read': email.is_read
+        })
     
     return {
-        "success": True,
-        "message": f"Email cache cleared for user {user_id}"
+        "emails": email_list,
+        "query": q,
+        "count": len(email_list)
     }
+
+@app.get("/emails/stats")
+async def get_email_stats(user_id: str = Depends(get_current_user)):
+    """Get email statistics for current user"""
+    stats = email_manager.get_email_stats(user_id)
+    return stats
+
+@app.post("/emails/sync")
+async def sync_emails(
+    limit: int = Query(default=50, le=200),
+    user_id: str = Depends(get_current_user)
+):
+    """Manually trigger email sync from Gmail"""
+    await sync_emails_from_gmail(user_id, limit)
+    
+    # Get updated stats
+    stats = email_manager.get_email_stats(user_id)
+    
+    return {
+        "success": True,
+        "message": f"Synced up to {limit} emails",
+        "stats": stats
+    }
+
+@app.put("/email/{email_id}/read")
+async def mark_email_read(
+    email_id: str,
+    is_read: bool = True,
+    user_id: str = Depends(get_current_user)
+):
+    """Mark email as read/unread"""
+    with get_db() as db:
+        email = db.query(Email).filter(
+            Email.user_id == user_id,
+            Email.gmail_message_id == email_id
+        ).first()
+        
+        if not email:
+            raise HTTPException(status_code=404, detail="Email not found")
+        
+        email.is_read = is_read
+        email.updated_at = datetime.utcnow()
+    
+    return {
+        "success": True,
+        "email_id": email_id,
+        "is_read": is_read
+    }
+
+# User management endpoints
+
+@app.get("/user/profile")
+async def get_user_profile(user_id: str = Depends(get_current_user)):
+    """Get current user profile"""
+    with get_db() as db:
+        user = db.query(User).filter(User.id == user_id).first()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        stats = email_manager.get_email_stats(user_id)
+        
+        return {
+            "id": str(user.id),
+            "email": user.email,
+            "name": user.name,
+            "created_at": user.created_at.isoformat(),
+            "last_login": user.last_login.isoformat() if user.last_login else None,
+            "email_stats": stats
+        }
+
+@app.put("/user/profile")
+async def update_user_profile(
+    name: Optional[str] = None,
+    user_id: str = Depends(get_current_user)
+):
+    """Update user profile"""
+    with get_db() as db:
+        user = db.query(User).filter(User.id == user_id).first()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        if name is not None:
+            user.name = name
+    
+    return {"success": True, "message": "Profile updated"}
 
 # Admin endpoints
 
 @app.get("/admin/users")
-async def get_active_users():
-    """Get list of active users with cache info"""
-    active_users = credential_manager.get_active_users()
-    user_info = []
-    
-    for user_id in active_users:
-        cache_stats = credential_manager.get_cache_stats(user_id)
-        user_info.append({
-            "user_id": user_id,
-            "cache_stats": cache_stats
-        })
+async def get_all_users():
+    """Get all users (admin endpoint)"""
+    with get_db() as db:
+        users = db.query(User).filter(User.is_active == True).all()
+        
+        user_list = []
+        for user in users:
+            stats = email_manager.get_email_stats(str(user.id))
+            user_list.append({
+                "id": str(user.id),
+                "email": user.email,
+                "name": user.name,
+                "created_at": user.created_at.isoformat(),
+                "last_login": user.last_login.isoformat() if user.last_login else None,
+                "email_count": stats["total_emails"]
+            })
     
     return {
-        "active_users": user_info,
-        "count": len(active_users)
+        "users": user_list,
+        "count": len(user_list)
     }
 
-@app.get("/admin/redis/info")
-async def redis_info():
-    """Get Redis server information"""
-    if not redis_client:
-        return {"error": "Redis not available"}
-    
-    try:
-        info = redis_client.info()
-        return {
-            "connected_clients": info.get('connected_clients'),
-            "used_memory_human": info.get('used_memory_human'),
-            "total_commands_processed": info.get('total_commands_processed'),
-            "uptime_in_seconds": info.get('uptime_in_seconds'),
-            "redis_version": info.get('redis_version'),
-            "keyspace_hits": info.get('keyspace_hits'),
-            "keyspace_misses": info.get('keyspace_misses')
-        }
-    except Exception as e:
-        return {"error": f"Failed to get Redis info: {str(e)}"}
-
-@app.get("/admin/redis/keys")
-async def redis_keys():
-    """Get Redis keys information"""
-    if not redis_client:
-        return {"error": "Redis not available"}
-    
-    try:
-        cred_keys = redis_client.keys("creds:*")
-        email_list_keys = redis_client.keys("emails:list:*")
-        email_content_keys = redis_client.keys("emails:content:*")
+@app.get("/admin/stats")
+async def get_admin_stats():
+    """Get system-wide statistics"""
+    with get_db() as db:
+        total_users = db.query(User).filter(User.is_active == True).count()
+        total_emails = db.query(Email).count()
         
-        return {
-            "credentials": len(cred_keys),
-            "email_lists": len(email_list_keys),
-            "email_contents": len(email_content_keys),
-            "total_keys": len(cred_keys) + len(email_list_keys) + len(email_content_keys),
-            "sample_keys": {
-                "credentials": cred_keys[:5],
-                "email_lists": email_list_keys[:5],
-                "email_contents": email_content_keys[:5]
-            }
-        }
-    except Exception as e:
-        return {"error": f"Failed to get Redis keys: {str(e)}"}
+        # Recent activity
+        recent_users = db.query(User).filter(
+            User.last_login >= datetime.utcnow() - timedelta(days=7),
+            User.is_active == True
+        ).count()
+        
+        # Database size info
+        db_size = db.execute(text("""
+            SELECT pg_size_pretty(pg_database_size(current_database())) as size
+        """)).scalar()
+        
+        # Email volume by day (last 7 days)
+        email_volume = db.execute(text("""
+            SELECT DATE(created_at) as date, COUNT(*) as count
+            FROM emails 
+            WHERE created_at >= NOW() - INTERVAL '7 days'
+            GROUP BY DATE(created_at)
+            ORDER BY date DESC
+        """)).fetchall()
+    
+    return {
+        "total_users": total_users,
+        "total_emails": total_emails,
+        "active_users_week": recent_users,
+        "database_size": db_size,
+        "email_volume_week": [
+            {"date": row.date.isoformat(), "count": row.count} 
+            for row in email_volume
+        ]
+    }
 
 @app.delete("/admin/user/{user_id}")
-async def delete_user(user_id: str):
-    """Delete a specific user's credentials and cache (admin endpoint)"""
-    credential_manager.delete_credentials(user_id)
-    return {"success": True, "message": f"User {user_id} and all associated data deleted"}
+async def delete_user_admin(user_id: str):
+    """Deactivate user (admin endpoint)"""
+    credential_manager.deactivate_user(user_id)
+    return {"success": True, "message": f"User {user_id} deactivated"}
 
-@app.delete("/admin/cache/clear-all")
-async def clear_all_cache():
-    """Clear all cached data (admin endpoint)"""
-    if redis_client:
+@app.get("/admin/database/health")
+async def database_health():
+    """Check database health and performance"""
+    with get_db() as db:
         try:
-            # Get all cache keys
-            all_keys = redis_client.keys("emails:*")
-            if all_keys:
-                redis_client.delete(*all_keys)
-            print("✅ Cleared all email cache from Redis")
-        except Exception as e:
-            print(f"Redis clear all cache error: {e}")
-    
-    # Clear memory fallbacks
-    email_cache.clear()
-    email_content_cache.clear()
-    
-    return {
-        "success": True,
-        "message": "All email cache cleared"
-    }
-
-@app.get("/admin/cache/stats")
-async def get_global_cache_stats():
-    """Get global cache statistics (admin endpoint)"""
-    stats = {
-        "redis_connected": redis_client is not None,
-        "total_users": len(credential_manager.get_active_users()),
-        "memory_fallback": {
-            "email_lists": len(email_cache),
-            "email_contents": len(email_content_cache)
-        }
-    }
-    
-    if redis_client:
-        try:
-            cred_keys = redis_client.keys("creds:*")
-            email_list_keys = redis_client.keys("emails:list:*")
-            email_content_keys = redis_client.keys("emails:content:*")
+            # Connection test
+            db.execute(text("SELECT 1"))
             
-            stats["redis"] = {
-                "credentials": len(cred_keys),
-                "email_lists": len(email_list_keys),
-                "email_contents": len(email_content_keys),
-                "total_keys": len(cred_keys) + len(email_list_keys) + len(email_content_keys)
+            # Table sizes
+            table_sizes = db.execute(text("""
+                SELECT 
+                    tablename,
+                    pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) as size
+                FROM pg_tables 
+                WHERE schemaname = 'public'
+                ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC
+            """)).fetchall()
+            
+            # Index usage
+            index_usage = db.execute(text("""
+                SELECT 
+                    schemaname, tablename, indexname, idx_tup_read, idx_tup_fetch
+                FROM pg_stat_user_indexes 
+                ORDER BY idx_tup_read DESC 
+                LIMIT 10
+            """)).fetchall()
+            
+            return {
+                "status": "healthy",
+                "table_sizes": [
+                    {"table": row.tablename, "size": row.size} 
+                    for row in table_sizes
+                ],
+                "top_indexes": [
+                    {
+                        "table": row.tablename,
+                        "index": row.indexname,
+                        "reads": row.idx_tup_read,
+                        "fetches": row.idx_tup_fetch
+                    }
+                    for row in index_usage
+                ]
             }
         except Exception as e:
-            stats["redis"] = {"error": str(e)}
-    
-    return stats
+            return {
+                "status": "error",
+                "error": str(e)
+            }
 
-# Batch operations
+# Cache management endpoints
 
-@app.post("/batch/preload-emails")
-async def preload_emails(
-    user_ids: Optional[List[str]] = None,
-    limit: int = 10,
-    current_user: str = Depends(get_current_user)
-):
-    """Preload emails for multiple users (admin or current user only)"""
-    if user_ids is None:
-        user_ids = [current_user]
-    elif current_user not in user_ids:
-        # Only allow current user unless they're preloading just their own data
-        if len(user_ids) != 1 or user_ids[0] != current_user:
-            raise HTTPException(status_code=403, detail="Can only preload your own emails")
-    
-    results = {}
-    
-    for user_id in user_ids:
+@app.delete("/cache/clear")
+async def clear_cache(user_id: str = Depends(get_current_user)):
+    """Clear Redis cache for current user"""
+    if redis_client:
         try:
-            creds = credential_manager.load_credentials(user_id)
-            if not creds or not creds.valid:
-                results[user_id] = {"error": "Not authenticated"}
-                continue
-            
-            def fetch_emails():
-                service = build('gmail', 'v1', credentials=creds)
-                
-                # Get list of messages
-                gmail_results = service.users().messages().list(
-                    userId='me', 
-                    maxResults=limit
-                ).execute()
-                
-                messages = gmail_results.get('messages', [])
-                
-                email_list = []
-                for message in messages:
-                    try:
-                        # Get message details
-                        msg = service.users().messages().get(
-                            userId='me', 
-                            id=message['id']
-                        ).execute()
-                        
-                        # Extract headers
-                        headers = msg['payload'].get('headers', [])
-                        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
-                        sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown Sender')
-                        date = next((h['value'] for h in headers if h['name'] == 'Date'), 'Unknown Date')
-                        
-                        email_list.append({
-                            'id': message['id'],
-                            'subject': subject,
-                            'sender': sender,
-                            'date': date,
-                            'snippet': msg.get('snippet', ''),
-                            'fetched_at': datetime.utcnow().isoformat()
-                        })
-                    except Exception as e:
-                        print(f"Error processing message {message['id']}: {e}")
-                        continue
-                
-                return email_list
-            
-            email_list = await gmail_api_call(fetch_emails)
-            
-            # Cache the results
-            if email_list:
-                credential_manager.cache_email_list(user_id, email_list)
-                results[user_id] = {
-                    "success": True,
-                    "count": len(email_list),
-                    "cached_at": datetime.utcnow().isoformat()
-                }
-            else:
-                results[user_id] = {"success": True, "count": 0}
-                
+            # Clear user-specific cache keys
+            keys = redis_client.keys(f"*:{user_id}")
+            if keys:
+                redis_client.delete(*keys)
+            return {"success": True, "message": f"Cleared {len(keys)} cache entries"}
         except Exception as e:
-            results[user_id] = {"error": str(e)}
+            return {"success": False, "error": str(e)}
+    else:
+        return {"success": False, "message": "Redis not available"}
+
+# Startup and shutdown events
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize application on startup"""
+    print("🚀 Gmail API with PostgreSQL starting up...")
     
-    return {
-        "preload_results": results,
-        "total_users": len(user_ids),
-        "successful": len([r for r in results.values() if r.get("success")])
-    }
+    # Test database connection
+    try:
+        with get_db() as db:
+            db.execute(text("SELECT version()"))
+        print("✅ PostgreSQL connection successful")
+    except Exception as e:
+        print(f"❌ PostgreSQL connection failed: {e}")
+    
+    # Test Redis connection
+    if redis_client:
+        try:
+            redis_client.ping()
+            print("✅ Redis connection successful")
+        except Exception as e:
+            print(f"⚠️ Redis connection failed: {e}")
 
-# Configuration endpoints
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    print("🛑 Gmail API shutting down...")
+    
+    # Close thread pool
+    executor.shutdown(wait=True)
+    
+    # Close database connections
+    engine.dispose()
+    
+    print("✅ Cleanup completed")
 
-@app.get("/config")
-async def get_config():
-    """Get current configuration"""
-    return {
-        "cache_ttl": {
-            "email_list": EMAIL_LIST_TTL,
-            "email_content": EMAIL_CONTENT_TTL,
-            "credentials": CREDENTIALS_TTL
-        },
-        "redis": {
-            "host": REDIS_HOST,
-            "port": REDIS_PORT,
-            "db": REDIS_DB,
-            "connected": redis_client is not None
-        },
-        "scopes": SCOPES,
-        "max_workers": executor._max_workers
-    }
-
-# Fixed: Proper way to run with reload
+# Fixed: Proper way to run with reload  
 def run_server():
     """Run the server with proper configuration"""
     import uvicorn
