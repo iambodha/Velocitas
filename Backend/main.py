@@ -17,6 +17,7 @@ import redis
 import jwt
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
+import hashlib
 
 # Load environment variables
 load_dotenv()
@@ -26,7 +27,7 @@ os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app = FastAPI(
     title="Multi-User Gmail API",
-    description="Gmail API with support for multiple users and concurrent requests",
+    description="Gmail API with support for multiple users and concurrent requests with Redis email storage",
     version="1.0.0"
 )
 
@@ -56,18 +57,24 @@ REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', None)
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
 
+# Cache TTL settings
+EMAIL_LIST_TTL = int(os.getenv('EMAIL_LIST_TTL', 300))  # 5 minutes
+EMAIL_CONTENT_TTL = int(os.getenv('EMAIL_CONTENT_TTL', 3600))  # 1 hour
+CREDENTIALS_TTL = int(os.getenv('CREDENTIALS_TTL', 86400))  # 24 hours
+
 # Thread pool for handling Gmail API calls
 executor = ThreadPoolExecutor(max_workers=10)
 
 # Fallback in-memory storage
 user_credentials: Dict[str, dict] = {}
 pending_auth: Dict[str, str] = {}  # state -> session_id
+email_cache: Dict[str, List[dict]] = {}  # user_id -> emails
+email_content_cache: Dict[str, dict] = {}  # email_key -> email_content
 
 # Initialize Redis client
 def create_redis_client():
     """Create Redis client with error handling"""
     try:
-        # Fixed: Removed deprecated retry_on_timeout parameter
         client = redis.Redis(
             host=REDIS_HOST,
             port=REDIS_PORT,
@@ -89,7 +96,7 @@ def create_redis_client():
 redis_client = create_redis_client()
 
 class CredentialManager:
-    """Enhanced credential manager with Redis support and fallback"""
+    """Enhanced credential manager with Redis support and email storage"""
     
     def __init__(self, redis_client=None):
         self.redis = redis_client
@@ -108,12 +115,13 @@ class CredentialManager:
         
         if self.redis:
             try:
-                # Store in Redis with 24-hour expiration
+                # Store in Redis with configurable expiration
                 self.redis.setex(
                     f"creds:{user_id}", 
-                    timedelta(hours=24), 
+                    CREDENTIALS_TTL, 
                     json.dumps(creds_dict)
                 )
+                print(f"✅ Saved credentials for user {user_id} to Redis")
             except Exception as e:
                 print(f"Redis save error: {e}, falling back to memory")
                 user_credentials[user_id] = creds_dict
@@ -162,14 +170,28 @@ class CredentialManager:
             return None
     
     def delete_credentials(self, user_id: str):
-        """Delete credentials from Redis and memory"""
+        """Delete credentials and all associated email data"""
         if self.redis:
             try:
+                # Delete credentials
                 self.redis.delete(f"creds:{user_id}")
+                # Delete all email lists for this user
+                self.redis.delete(f"emails:list:{user_id}")
+                # Delete individual email cache entries
+                email_keys = self.redis.keys(f"emails:content:{user_id}:*")
+                if email_keys:
+                    self.redis.delete(*email_keys)
+                print(f"✅ Deleted all data for user {user_id} from Redis")
             except Exception as e:
                 print(f"Redis delete error: {e}")
         
+        # Clean up memory fallbacks
         user_credentials.pop(user_id, None)
+        email_cache.pop(user_id, None)
+        # Clean up email content cache
+        keys_to_remove = [k for k in email_content_cache.keys() if k.startswith(f"{user_id}:")]
+        for key in keys_to_remove:
+            email_content_cache.pop(key, None)
     
     def get_active_users(self) -> List[str]:
         """Get list of users with stored credentials"""
@@ -188,28 +210,148 @@ class CredentialManager:
         
         return list(active_users)
     
-    def cache_emails(self, user_id: str, emails: List[dict], ttl: int = 300):
-        """Cache email list for 5 minutes"""
+    def cache_email_list(self, user_id: str, emails: List[dict], ttl: int = EMAIL_LIST_TTL):
+        """Cache email list with configurable TTL"""
+        cache_data = {
+            'emails': emails,
+            'cached_at': datetime.utcnow().isoformat(),
+            'count': len(emails)
+        }
+        
         if self.redis:
             try:
                 self.redis.setex(
-                    f"emails:{user_id}", 
+                    f"emails:list:{user_id}", 
                     ttl, 
-                    json.dumps(emails)
+                    json.dumps(cache_data)
                 )
+                print(f"✅ Cached {len(emails)} emails for user {user_id} (TTL: {ttl}s)")
             except Exception as e:
-                print(f"Cache emails error: {e}")
+                print(f"Cache email list error: {e}")
+                # Fallback to memory
+                email_cache[user_id] = emails
+        else:
+            # Fallback to in-memory
+            email_cache[user_id] = emails
     
-    def get_cached_emails(self, user_id: str) -> Optional[List[dict]]:
-        """Get cached emails if available"""
+    def get_cached_email_list(self, user_id: str) -> Optional[Dict]:
+        """Get cached email list with metadata"""
         if self.redis:
             try:
-                data = self.redis.get(f"emails:{user_id}")
+                data = self.redis.get(f"emails:list:{user_id}")
+                if data:
+                    cache_data = json.loads(data)
+                    return cache_data
+            except Exception as e:
+                print(f"Get cached email list error: {e}")
+                # Try memory fallback
+                emails = email_cache.get(user_id)
+                if emails:
+                    return {
+                        'emails': emails,
+                        'cached_at': datetime.utcnow().isoformat(),
+                        'count': len(emails)
+                    }
+        else:
+            # Memory fallback
+            emails = email_cache.get(user_id)
+            if emails:
+                return {
+                    'emails': emails,
+                    'cached_at': datetime.utcnow().isoformat(),
+                    'count': len(emails)
+                }
+        return None
+    
+    def cache_email_content(self, user_id: str, email_id: str, email_data: dict, ttl: int = EMAIL_CONTENT_TTL):
+        """Cache individual email content"""
+        cache_key = f"emails:content:{user_id}:{email_id}"
+        cache_data = {
+            **email_data,
+            'cached_at': datetime.utcnow().isoformat()
+        }
+        
+        if self.redis:
+            try:
+                self.redis.setex(
+                    cache_key,
+                    ttl,
+                    json.dumps(cache_data)
+                )
+                print(f"✅ Cached email {email_id} for user {user_id} (TTL: {ttl}s)")
+            except Exception as e:
+                print(f"Cache email content error: {e}")
+                # Fallback to memory
+                email_content_cache[f"{user_id}:{email_id}"] = cache_data
+        else:
+            # Fallback to in-memory
+            email_content_cache[f"{user_id}:{email_id}"] = cache_data
+    
+    def get_cached_email_content(self, user_id: str, email_id: str) -> Optional[dict]:
+        """Get cached email content"""
+        cache_key = f"emails:content:{user_id}:{email_id}"
+        
+        if self.redis:
+            try:
+                data = self.redis.get(cache_key)
                 if data:
                     return json.loads(data)
             except Exception as e:
-                print(f"Get cached emails error: {e}")
+                print(f"Get cached email content error: {e}")
+                # Try memory fallback
+                return email_content_cache.get(f"{user_id}:{email_id}")
+        else:
+            # Memory fallback
+            return email_content_cache.get(f"{user_id}:{email_id}")
+        
         return None
+    
+    def get_cache_stats(self, user_id: str) -> dict:
+        """Get cache statistics for a user"""
+        stats = {
+            'email_lists': 0,
+            'email_contents': 0,
+            'total_cached_emails': 0
+        }
+        
+        if self.redis:
+            try:
+                # Check email list cache
+                if self.redis.exists(f"emails:list:{user_id}"):
+                    stats['email_lists'] = 1
+                    list_data = self.redis.get(f"emails:list:{user_id}")
+                    if list_data:
+                        cache_data = json.loads(list_data)
+                        stats['total_cached_emails'] = cache_data.get('count', 0)
+                
+                # Count email content caches
+                content_keys = self.redis.keys(f"emails:content:{user_id}:*")
+                stats['email_contents'] = len(content_keys)
+                
+            except Exception as e:
+                print(f"Get cache stats error: {e}")
+        
+        return stats
+    
+    def clear_user_cache(self, user_id: str):
+        """Clear all cached data for a user"""
+        if self.redis:
+            try:
+                # Clear email list cache
+                self.redis.delete(f"emails:list:{user_id}")
+                # Clear email content cache
+                content_keys = self.redis.keys(f"emails:content:{user_id}:*")
+                if content_keys:
+                    self.redis.delete(*content_keys)
+                print(f"✅ Cleared all cache for user {user_id}")
+            except Exception as e:
+                print(f"Clear cache error: {e}")
+        
+        # Clear memory fallbacks
+        email_cache.pop(user_id, None)
+        keys_to_remove = [k for k in email_content_cache.keys() if k.startswith(f"{user_id}:")]
+        for key in keys_to_remove:
+            email_content_cache.pop(key, None)
 
 # Initialize credential manager
 credential_manager = CredentialManager(redis_client)
@@ -263,9 +405,14 @@ async def gmail_api_call(func, *args, **kwargs):
 async def root():
     """Root endpoint"""
     return {
-        "message": "Multi-User Gmail API", 
+        "message": "Multi-User Gmail API with Redis Email Storage", 
         "version": "1.0.0",
-        "redis_connected": redis_client is not None
+        "redis_connected": redis_client is not None,
+        "cache_ttl": {
+            "email_list": EMAIL_LIST_TTL,
+            "email_content": EMAIL_CONTENT_TTL,
+            "credentials": CREDENTIALS_TTL
+        }
     }
 
 @app.get("/health")
@@ -303,6 +450,7 @@ async def auth():
         "authorization_url": authorization_url,
         "session_id": session_id
     }
+
 @app.get("/callback")
 async def callback(request: Request):
     """Handle OAuth callback"""
@@ -449,17 +597,21 @@ async def callback(request: Request):
 async def status(user_id: str = Depends(get_current_user)):
     """Check authentication status for current user"""
     creds = credential_manager.load_credentials(user_id)
+    cache_stats = credential_manager.get_cache_stats(user_id)
+    
     if creds and creds.valid:
         return {
             "authenticated": True, 
             "message": "Ready to access Gmail", 
-            "user_id": user_id
+            "user_id": user_id,
+            "cache_stats": cache_stats
         }
     else:
         return {
             "authenticated": False, 
             "message": "Not authenticated", 
-            "user_id": user_id
+            "user_id": user_id,
+            "cache_stats": cache_stats
         }
 
 @app.post("/logout")
@@ -472,19 +624,22 @@ async def logout(user_id: str = Depends(get_current_user)):
 async def get_emails(
     limit: int = 10, 
     use_cache: bool = True,
+    force_refresh: bool = False,
     user_id: str = Depends(get_current_user)
 ):
-    """Get list of emails for current user with caching"""
+    """Get list of emails for current user with enhanced caching"""
     
-    # Check cache first
-    if use_cache:
-        cached_emails = credential_manager.get_cached_emails(user_id)
-        if cached_emails:
+    # Check cache first (unless force refresh is requested)
+    if use_cache and not force_refresh:
+        cached_data = credential_manager.get_cached_email_list(user_id)
+        if cached_data:
             return {
-                "emails": cached_emails, 
+                "emails": cached_data['emails'], 
                 "user_id": user_id, 
                 "cached": True,
-                "count": len(cached_emails)
+                "cached_at": cached_data['cached_at'],
+                "count": cached_data['count'],
+                "source": "redis" if redis_client else "memory"
             }
     
     # Load credentials
@@ -524,7 +679,8 @@ async def get_emails(
                         'subject': subject,
                         'sender': sender,
                         'date': date,
-                        'snippet': msg.get('snippet', '')
+                        'snippet': msg.get('snippet', ''),
+                        'fetched_at': datetime.utcnow().isoformat()
                     })
                 except Exception as e:
                     print(f"Error processing message {message['id']}: {e}")
@@ -536,21 +692,39 @@ async def get_emails(
         
         # Cache the results
         if email_list:
-            credential_manager.cache_emails(user_id, email_list)
+            credential_manager.cache_email_list(user_id, email_list)
         
         return {
             "emails": email_list, 
             "user_id": user_id, 
             "cached": False,
-            "count": len(email_list)
+            "fetched_at": datetime.utcnow().isoformat(),
+            "count": len(email_list),
+            "source": "gmail_api"
         }
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch emails: {str(e)}")
 
 @app.get("/email/{email_id}")
-async def get_email(email_id: str, user_id: str = Depends(get_current_user)):
-    """Get specific email content for current user"""
+async def get_email(
+    email_id: str, 
+    use_cache: bool = True,
+    force_refresh: bool = False,
+    user_id: str = Depends(get_current_user)
+):
+    """Get specific email content for current user with caching"""
+    
+    # Check cache first (unless force refresh is requested)
+    if use_cache and not force_refresh:
+        cached_email = credential_manager.get_cached_email_content(user_id, email_id)
+        if cached_email:
+            return {
+                **cached_email,
+                "cached": True,
+                "source": "redis" if redis_client else "memory"
+            }
+    
     creds = credential_manager.load_credentials(user_id)
     if not creds or not creds.valid:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -602,23 +776,87 @@ async def get_email(email_id: str, user_id: str = Depends(get_current_user)):
                 "date": date,
                 "body": body,
                 "snippet": message.get('snippet', ''),
-                "user_id": user_id
+                "user_id": user_id,
+                "fetched_at": datetime.utcnow().isoformat()
             }
         
         email_data = await gmail_api_call(fetch_email)
-        return email_data
+        
+        # Cache the email content
+        credential_manager.cache_email_content(user_id, email_id, email_data)
+        
+        return {
+            **email_data,
+            "cached": False,
+            "source": "gmail_api"
+        }
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch email: {str(e)}")
+
+# Cache management endpoints
+
+@app.get("/cache/stats")
+async def get_cache_stats(user_id: str = Depends(get_current_user)):
+    """Get cache statistics for current user"""
+    stats = credential_manager.get_cache_stats(user_id)
+    return {
+        "user_id": user_id,
+        "cache_stats": stats,
+        "redis_connected": redis_client is not None
+    }
+
+@app.delete("/cache/clear")
+async def clear_cache(user_id: str = Depends(get_current_user)):
+    """Clear all cached data for current user"""
+    credential_manager.clear_user_cache(user_id)
+    return {
+        "success": True,
+        "message": f"Cache cleared for user {user_id}"
+    }
+
+@app.delete("/cache/emails")
+async def clear_email_cache(user_id: str = Depends(get_current_user)):
+    """Clear only email cache for current user"""
+    if redis_client:
+        try:
+            # Clear email list cache
+            redis_client.delete(f"emails:list:{user_id}")
+            # Clear email content cache
+            content_keys = redis_client.keys(f"emails:content:{user_id}:*")
+            if content_keys:
+                redis_client.delete(*content_keys)
+        except Exception as e:
+            print(f"Redis email cache clear error: {e}")
+    
+    # Clear memory fallbacks
+    email_cache.pop(user_id, None)
+    keys_to_remove = [k for k in email_content_cache.keys() if k.startswith(f"{user_id}:")]
+    for key in keys_to_remove:
+        email_content_cache.pop(key, None)
+    
+    return {
+        "success": True,
+        "message": f"Email cache cleared for user {user_id}"
+    }
 
 # Admin endpoints
 
 @app.get("/admin/users")
 async def get_active_users():
-    """Get list of active users"""
+    """Get list of active users with cache info"""
     active_users = credential_manager.get_active_users()
+    user_info = []
+    
+    for user_id in active_users:
+        cache_stats = credential_manager.get_cache_stats(user_id)
+        user_info.append({
+            "user_id": user_id,
+            "cache_stats": cache_stats
+        })
+    
     return {
-        "active_users": active_users,
+        "active_users": user_info,
         "count": len(active_users)
     }
 
@@ -635,16 +873,202 @@ async def redis_info():
             "used_memory_human": info.get('used_memory_human'),
             "total_commands_processed": info.get('total_commands_processed'),
             "uptime_in_seconds": info.get('uptime_in_seconds'),
-            "redis_version": info.get('redis_version')
+            "redis_version": info.get('redis_version'),
+            "keyspace_hits": info.get('keyspace_hits'),
+            "keyspace_misses": info.get('keyspace_misses')
         }
     except Exception as e:
         return {"error": f"Failed to get Redis info: {str(e)}"}
 
+@app.get("/admin/redis/keys")
+async def redis_keys():
+    """Get Redis keys information"""
+    if not redis_client:
+        return {"error": "Redis not available"}
+    
+    try:
+        cred_keys = redis_client.keys("creds:*")
+        email_list_keys = redis_client.keys("emails:list:*")
+        email_content_keys = redis_client.keys("emails:content:*")
+        
+        return {
+            "credentials": len(cred_keys),
+            "email_lists": len(email_list_keys),
+            "email_contents": len(email_content_keys),
+            "total_keys": len(cred_keys) + len(email_list_keys) + len(email_content_keys),
+            "sample_keys": {
+                "credentials": cred_keys[:5],
+                "email_lists": email_list_keys[:5],
+                "email_contents": email_content_keys[:5]
+            }
+        }
+    except Exception as e:
+        return {"error": f"Failed to get Redis keys: {str(e)}"}
+
 @app.delete("/admin/user/{user_id}")
 async def delete_user(user_id: str):
-    """Delete a specific user's credentials (admin endpoint)"""
+    """Delete a specific user's credentials and cache (admin endpoint)"""
     credential_manager.delete_credentials(user_id)
-    return {"success": True, "message": f"User {user_id} deleted"}
+    return {"success": True, "message": f"User {user_id} and all associated data deleted"}
+
+@app.delete("/admin/cache/clear-all")
+async def clear_all_cache():
+    """Clear all cached data (admin endpoint)"""
+    if redis_client:
+        try:
+            # Get all cache keys
+            all_keys = redis_client.keys("emails:*")
+            if all_keys:
+                redis_client.delete(*all_keys)
+            print("✅ Cleared all email cache from Redis")
+        except Exception as e:
+            print(f"Redis clear all cache error: {e}")
+    
+    # Clear memory fallbacks
+    email_cache.clear()
+    email_content_cache.clear()
+    
+    return {
+        "success": True,
+        "message": "All email cache cleared"
+    }
+
+@app.get("/admin/cache/stats")
+async def get_global_cache_stats():
+    """Get global cache statistics (admin endpoint)"""
+    stats = {
+        "redis_connected": redis_client is not None,
+        "total_users": len(credential_manager.get_active_users()),
+        "memory_fallback": {
+            "email_lists": len(email_cache),
+            "email_contents": len(email_content_cache)
+        }
+    }
+    
+    if redis_client:
+        try:
+            cred_keys = redis_client.keys("creds:*")
+            email_list_keys = redis_client.keys("emails:list:*")
+            email_content_keys = redis_client.keys("emails:content:*")
+            
+            stats["redis"] = {
+                "credentials": len(cred_keys),
+                "email_lists": len(email_list_keys),
+                "email_contents": len(email_content_keys),
+                "total_keys": len(cred_keys) + len(email_list_keys) + len(email_content_keys)
+            }
+        except Exception as e:
+            stats["redis"] = {"error": str(e)}
+    
+    return stats
+
+# Batch operations
+
+@app.post("/batch/preload-emails")
+async def preload_emails(
+    user_ids: Optional[List[str]] = None,
+    limit: int = 10,
+    current_user: str = Depends(get_current_user)
+):
+    """Preload emails for multiple users (admin or current user only)"""
+    if user_ids is None:
+        user_ids = [current_user]
+    elif current_user not in user_ids:
+        # Only allow current user unless they're preloading just their own data
+        if len(user_ids) != 1 or user_ids[0] != current_user:
+            raise HTTPException(status_code=403, detail="Can only preload your own emails")
+    
+    results = {}
+    
+    for user_id in user_ids:
+        try:
+            creds = credential_manager.load_credentials(user_id)
+            if not creds or not creds.valid:
+                results[user_id] = {"error": "Not authenticated"}
+                continue
+            
+            def fetch_emails():
+                service = build('gmail', 'v1', credentials=creds)
+                
+                # Get list of messages
+                gmail_results = service.users().messages().list(
+                    userId='me', 
+                    maxResults=limit
+                ).execute()
+                
+                messages = gmail_results.get('messages', [])
+                
+                email_list = []
+                for message in messages:
+                    try:
+                        # Get message details
+                        msg = service.users().messages().get(
+                            userId='me', 
+                            id=message['id']
+                        ).execute()
+                        
+                        # Extract headers
+                        headers = msg['payload'].get('headers', [])
+                        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
+                        sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown Sender')
+                        date = next((h['value'] for h in headers if h['name'] == 'Date'), 'Unknown Date')
+                        
+                        email_list.append({
+                            'id': message['id'],
+                            'subject': subject,
+                            'sender': sender,
+                            'date': date,
+                            'snippet': msg.get('snippet', ''),
+                            'fetched_at': datetime.utcnow().isoformat()
+                        })
+                    except Exception as e:
+                        print(f"Error processing message {message['id']}: {e}")
+                        continue
+                
+                return email_list
+            
+            email_list = await gmail_api_call(fetch_emails)
+            
+            # Cache the results
+            if email_list:
+                credential_manager.cache_email_list(user_id, email_list)
+                results[user_id] = {
+                    "success": True,
+                    "count": len(email_list),
+                    "cached_at": datetime.utcnow().isoformat()
+                }
+            else:
+                results[user_id] = {"success": True, "count": 0}
+                
+        except Exception as e:
+            results[user_id] = {"error": str(e)}
+    
+    return {
+        "preload_results": results,
+        "total_users": len(user_ids),
+        "successful": len([r for r in results.values() if r.get("success")])
+    }
+
+# Configuration endpoints
+
+@app.get("/config")
+async def get_config():
+    """Get current configuration"""
+    return {
+        "cache_ttl": {
+            "email_list": EMAIL_LIST_TTL,
+            "email_content": EMAIL_CONTENT_TTL,
+            "credentials": CREDENTIALS_TTL
+        },
+        "redis": {
+            "host": REDIS_HOST,
+            "port": REDIS_PORT,
+            "db": REDIS_DB,
+            "connected": redis_client is not None
+        },
+        "scopes": SCOPES,
+        "max_workers": executor._max_workers
+    }
 
 # Fixed: Proper way to run with reload
 def run_server():
