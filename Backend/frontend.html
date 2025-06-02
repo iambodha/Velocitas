@@ -542,8 +542,25 @@
                 }
                 
                 const data = await response.json();
+                console.log("API Response:", data); // Debug response
+                
+                // Make sure we have emails array
+                if (!data.emails) {
+                    showMessage("Received invalid data format from server", 'error');
+                    console.error("Invalid API response format:", data);
+                    return;
+                }
+                
                 emails = data.emails || [];
                 filteredEmails = [...emails];
+                
+                // Debug email structure
+                if (emails.length > 0) {
+                    console.log("Sample email structure:", emails[0]);
+                } else {
+                    console.log("No emails returned from API");
+                }
+                
                 displayEmails();
                 
                 const cacheStatus = data.cached ? ' (cached)' : '';
@@ -552,6 +569,18 @@
             } catch (error) {
                 console.error('Failed to fetch emails:', error);
                 showMessage(`Failed to fetch emails: ${error.message}`, 'error');
+                
+                // Display error state in the emails list
+                const emailsList = document.getElementById('emailsList');
+                emailsList.innerHTML = `
+                    <div class="empty-state">
+                        <svg fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+                        </svg>
+                        <p>Error loading emails</p>
+                        <p class="error-details">${error.message}</p>
+                    </div>
+                `;
             } finally {
                 showLoading('refreshBtn', false);
             }
@@ -596,14 +625,35 @@
                 return;
             }
 
-            emailsList.innerHTML = filteredEmails.map(email => `
-                <div class="email-item ${selectedEmailId === email.id ? 'selected' : ''}" onclick="selectEmail('${email.id}')">
-                    <div class="email-subject">${escapeHtml(email.subject)}</div>
-                    <div class="email-sender">${escapeHtml(email.sender)}</div>
-                    <div class="email-date">${formatDate(email.date)}</div>
-                    <div class="email-snippet">${escapeHtml(email.snippet)}</div>
-                </div>
-            `).join('');
+            try {
+                emailsList.innerHTML = filteredEmails.map(email => {
+                    // Validate required email properties
+                    if (!email.id) {
+                        console.warn("Email missing ID:", email);
+                        return ''; // Skip this email
+                    }
+                    
+                    return `
+                        <div class="email-item ${selectedEmailId === email.id ? 'selected' : ''}" onclick="selectEmail('${email.id}')">
+                            <div class="email-subject">${escapeHtml(email.subject || 'No Subject')}</div>
+                            <div class="email-sender">${escapeHtml(email.sender || 'Unknown Sender')}</div>
+                            <div class="email-date">${email.date ? formatDate(email.date) : 'Unknown Date'}</div>
+                            <div class="email-snippet">${escapeHtml(email.snippet || '')}</div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (error) {
+                console.error("Error displaying emails:", error);
+                emailsList.innerHTML = `
+                    <div class="empty-state">
+                        <svg fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+                        </svg>
+                        <p>Error displaying emails</p>
+                        <p class="error-details">${error.message}</p>
+                    </div>
+                `;
+            }
         }
 
         async function selectEmail(emailId) {

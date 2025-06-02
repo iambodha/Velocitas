@@ -129,12 +129,20 @@ class Email(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     is_read = Column(Boolean, default=False)
     
+    # New fields
+    is_starred = Column(Boolean, default=False)
+    category = Column(String(100), nullable=True, index=True)
+    urgency = Column(Integer, default=0, nullable=True)
+    
     # Composite indexes for efficient queries
     __table_args__ = (
         Index('idx_email_user_gmail_id', 'user_id', 'gmail_message_id', unique=True),
         Index('idx_email_user_date', 'user_id', 'date_sent'),
         Index('idx_email_user_read', 'user_id', 'is_read'),
         Index('idx_email_sender', 'sender'),
+        Index('idx_email_starred', 'user_id', 'is_starred'),
+        Index('idx_email_category', 'user_id', 'category'),
+        Index('idx_email_urgency', 'user_id', 'urgency'),
     )
 
 # Database engine and session
@@ -264,6 +272,8 @@ class SecureCredentialManager:
                     last_login=datetime.utcnow()
                 )
                 db.add(user)
+                # Process new user registration
+                process_new_user_registration(email, name, google_user_id)
             
             db.flush()
             return str(user.id)
@@ -383,22 +393,55 @@ class EmailManager:
             
             return saved_count
     
-    def get_user_emails(self, user_id: str, limit: int = 50, offset: int = 0) -> List[Email]:
+    def get_user_emails(self, user_id: str, limit: int = 50, offset: int = 0) -> List[dict]:
         """Get user emails from database"""
         with get_db() as db:
-            return db.query(Email).filter(
+            emails = db.query(Email).filter(
                 Email.user_id == user_id
             ).order_by(
                 Email.date_sent.desc().nullslast()
             ).offset(offset).limit(limit).all()
+            
+            # Convert SQLAlchemy objects to dictionaries before session closes
+            email_list = []
+            for email in emails:
+                email_list.append({
+                    'id': email.gmail_message_id,
+                    'subject': email.subject,
+                    'sender': email.sender,
+                    'recipient': email.recipient,
+                    'date': email.date_sent.isoformat() if email.date_sent else None,
+                    'snippet': email.snippet,
+                    'is_read': email.is_read,
+                    'stored_at': email.created_at.isoformat()
+                })
+            
+            return email_list
     
-    def get_email_by_gmail_id(self, user_id: str, gmail_message_id: str) -> Optional[Email]:
+    def get_email_by_gmail_id(self, user_id: str, gmail_message_id: str) -> Optional[dict]:
         """Get specific email by Gmail message ID"""
         with get_db() as db:
-            return db.query(Email).filter(
+            email = db.query(Email).filter(
                 Email.user_id == user_id,
                 Email.gmail_message_id == gmail_message_id
             ).first()
+            
+            if not email:
+                return None
+            
+            # Convert to dictionary before session closes
+            return {
+                "id": email.gmail_message_id,
+                "subject": email.subject,
+                "sender": email.sender,
+                "recipient": email.recipient,
+                "date": email.date_sent.isoformat() if email.date_sent else None,
+                "body_text": email.body_text,
+                "body_html": email.body_html,
+                "snippet": email.snippet,
+                "is_read": email.is_read,
+                "source": "database"
+            }
     
     def search_emails(self, user_id: str, query: str, limit: int = 20) -> List[Email]:
         """Search emails by subject or sender"""
@@ -449,6 +492,122 @@ def create_session_token(user_id: str) -> str:
         'iat': datetime.utcnow()
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+# New function to handle user registration
+def process_new_user_registration(email: str, name: str, google_user_id: str):
+    """
+    Process a new user registration.
+    This function is called only when a new user signs up and is added to the database.
+    
+    Args:
+        email: User's email address
+        name: User's name
+        google_user_id: Google's unique user identifier
+    """
+    print(f"🎉 New user registered: {name} ({email})")
+    
+    try:
+        # Get the user's ID from database
+        with get_db() as db:
+            user = db.query(User).filter(User.google_user_id == google_user_id).first()
+            if not user:
+                print(f"⚠️ Could not find newly registered user: {email}")
+                return
+            
+            user_id = str(user.id)
+        
+        # Load credentials for the new user
+        creds = credential_manager.load_credentials(user_id)
+        if not creds or not creds.valid:
+            print(f"⚠️ Could not load valid credentials for new user: {email}")
+            return
+            
+        # Fetch emails from Gmail API (synchronously)
+        service = build('gmail', 'v1', credentials=creds)
+        
+        # Get list of messages (most recent 50)
+        results = service.users().messages().list(
+            userId='me',
+            maxResults=50
+        ).execute()
+        
+        messages = results.get('messages', [])
+        print(f"📥 Fetching {len(messages)} initial emails for new user: {email}")
+        
+        email_list = []
+        for message in messages:
+            try:
+                # Get message details
+                msg = service.users().messages().get(
+                    userId='me', 
+                    id=message['id'],
+                    format='full'  # Get full message details
+                ).execute()
+                
+                # Extract headers
+                headers = msg['payload'].get('headers', [])
+                subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
+                sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown Sender')
+                date = next((h['value'] for h in headers if h['name'] == 'Date'), 'Unknown Date')
+                to = next((h['value'] for h in headers if h['name'] == 'To'), 'Unknown Recipient')
+                
+                # Extract message metadata
+                is_read = 'UNREAD' not in msg.get('labelIds', [])
+                is_starred = 'STARRED' in msg.get('labelIds', [])
+                
+                # Extract body
+                def extract_body(payload):
+                    body = ""
+                    body_html = ""
+                    if 'parts' in payload:
+                        for part in payload['parts']:
+                            if part['mimeType'] == 'text/plain':
+                                if part['body'].get('data'):
+                                    data = part['body']['data']
+                                    body = base64.urlsafe_b64decode(data).decode('utf-8', errors='replace')
+                            elif part['mimeType'] == 'text/html':
+                                if part['body'].get('data'):
+                                    data = part['body']['data']
+                                    body_html = base64.urlsafe_b64decode(data).decode('utf-8', errors='replace')
+                    else:
+                        if payload['body'].get('data'):
+                            data = payload['body']['data']
+                            if 'mimeType' in payload and payload['mimeType'] == 'text/html':
+                                body_html = base64.urlsafe_b64decode(data).decode('utf-8', errors='replace')
+                            else:
+                                body = base64.urlsafe_b64decode(data).decode('utf-8', errors='replace')
+                    return body, body_html
+                
+                body_text, body_html = extract_body(msg['payload'])
+                
+                # Set category to None for all emails
+                category = None
+                
+                email_list.append({
+                    'id': message['id'],
+                    'subject': subject,
+                    'sender': sender,
+                    'to': to,
+                    'date': date,
+                    'body': body_text,
+                    'body_html': body_html,
+                    'snippet': msg.get('snippet', ''),
+                    'is_read': is_read,
+                    'is_starred': is_starred,
+                    'category': category,  # Always None
+                    'gmail_data': msg
+                })
+            except Exception as e:
+                print(f"Error processing message {message['id']}: {e}")
+                continue
+        
+        # Save emails to database
+        if email_list:
+            saved_count = email_manager.save_emails(user_id, email_list)
+            print(f"✅ Successfully saved {saved_count} initial emails for new user: {email}")
+        
+    except Exception as e:
+        print(f"❌ Error importing initial emails for {email}: {str(e)}")
 
 def verify_session_token(token: str) -> Optional[str]:
     """Verify JWT session token and return user_id"""
@@ -578,6 +737,10 @@ async def callback(request: Request):
         user_email = user_info.get('email', 'unknown')
         user_name = user_info.get('name', '')
         
+        # Check if user exists (returning user)
+        existing_user = credential_manager.get_user_by_google_id(google_user_id)
+        is_new_user = existing_user is None
+        
         # Save user and credentials to database
         user_id = credential_manager.save_user_and_credentials(
             google_user_id, user_email, user_name, credentials
@@ -588,6 +751,11 @@ async def callback(request: Request):
         
         # Clean up pending auth
         pending_auth.pop(state, None)
+        
+        # For returning users, sync latest emails as a background task
+        if not is_new_user:
+            asyncio.create_task(sync_latest_emails_until_overlap(user_id))
+            print(f"🔄 Background sync started for returning user: {user_email}")
         
         # Return HTML page that communicates with parent window
         html_response = f"""
@@ -647,7 +815,7 @@ async def callback(request: Request):
         """
         
         return HTMLResponse(content=html_response)
-    
+        
     except Exception as e:
         error_html = f"""
         <!DOCTYPE html>
@@ -742,21 +910,8 @@ async def get_emails(
         # Sync new emails from Gmail API
         await sync_emails_from_gmail(user_id, limit)
     
-    # Get emails from database
-    emails = email_manager.get_user_emails(user_id, limit, offset)
-    
-    email_list = []
-    for email in emails:
-        email_list.append({
-            'id': email.gmail_message_id,
-            'subject': email.subject,
-            'sender': email.sender,
-            'recipient': email.recipient,
-            'date': email.date_sent.isoformat() if email.date_sent else None,
-            'snippet': email.snippet,
-            'is_read': email.is_read,
-            'stored_at': email.created_at.isoformat()
-        })
+    # Get emails from database (now returns dictionaries, not SQLAlchemy objects)
+    email_list = email_manager.get_user_emails(user_id, limit, offset)
     
     return {
         "emails": email_list,
@@ -852,10 +1007,10 @@ async def get_email(email_id: str, user_id: str = Depends(get_current_user)):
     """Get specific email content from database or Gmail API"""
     
     # Try to get from database first
-    email = email_manager.get_email_by_gmail_id(user_id, email_id)
+    email_dict = email_manager.get_email_by_gmail_id(user_id, email_id)
     
-    if email:
-        # Mark as read
+    if email_dict:
+        # Mark as read (in a separate session)
         with get_db() as db:
             db_email = db.query(Email).filter(
                 Email.user_id == user_id,
@@ -864,18 +1019,7 @@ async def get_email(email_id: str, user_id: str = Depends(get_current_user)):
             if db_email:
                 db_email.is_read = True
         
-        return {
-            "id": email.gmail_message_id,
-            "subject": email.subject,
-            "sender": email.sender,
-            "recipient": email.recipient,
-            "date": email.date_sent.isoformat() if email.date_sent else None,
-            "body_text": email.body_text,
-            "body_html": email.body_html,
-            "snippet": email.snippet,
-            "is_read": email.is_read,
-            "source": "database"
-        }
+        return email_dict
     
     # Fallback to Gmail API if not in database
     creds = credential_manager.load_credentials(user_id)
@@ -888,7 +1032,7 @@ async def get_email(email_id: str, user_id: str = Depends(get_current_user)):
             
             # Get message
             message = service.users().messages().get(
-                userId='me', 
+                userId='me',
                 id=email_id,
                 format='full'
             ).execute()
@@ -1241,3 +1385,6 @@ def run_server():
 
 if __name__ == "__main__":
     run_server()
+
+async def sync_latest_emails_until_overlap(user_id: str):
+    print(f"🔄 Starting background sync for user {user_id}")
