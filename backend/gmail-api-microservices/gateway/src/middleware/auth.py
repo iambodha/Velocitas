@@ -1,4 +1,5 @@
 # File: /gmail-api-microservices/gmail-api-microservices/gateway/src/middleware/auth.py
+#Tested
 
 from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials

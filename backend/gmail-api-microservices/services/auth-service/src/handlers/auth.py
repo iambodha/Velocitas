@@ -1,4 +1,5 @@
 # File: /gmail-api-microservices/gmail-api-microservices/services/auth-service/src/handlers/auth.py
+#Tested
 
 import base64
 import json
