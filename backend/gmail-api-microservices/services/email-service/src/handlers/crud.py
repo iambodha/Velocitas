@@ -79,6 +79,9 @@ class EmailManager:
                     'date': email.date_sent.isoformat() if email.date_sent else None,
                     'snippet': email.snippet,
                     'is_read': email.is_read,
+                    'is_starred': email.is_starred,
+                    'category': email.category,
+                    'urgency': email.urgency,
                     'stored_at': email.created_at.isoformat()
                 })
             
@@ -106,6 +109,9 @@ class EmailManager:
                 "body_html": email.body_html,
                 "snippet": email.snippet,
                 "is_read": email.is_read,
+                "is_starred": email.is_starred,
+                "category": email.category,
+                "urgency": email.urgency,
                 "source": "database"
             }
     

@@ -7,6 +7,8 @@ from .database.db import get_db
 from .models.email import Email
 from .handlers.crud import EmailManager
 from .handlers.search import EmailSearchManager
+from pydantic import BaseModel, Field
+from datetime import datetime
 
 app = FastAPI(
     title="Email Service",
@@ -25,6 +27,13 @@ app.add_middleware(
 # Initialize managers
 email_manager = EmailManager()
 search_manager = EmailSearchManager()
+
+# Pydantic models
+class CategoryUpdate(BaseModel):
+    category: Optional[str] = None
+
+class UrgencyUpdate(BaseModel):
+    urgency: int = Field(ge=0, le=10, description="Urgency level from 0 to 10")
 
 @app.get("/health")
 async def health():
@@ -131,13 +140,103 @@ async def mark_email_read(
             raise HTTPException(status_code=404, detail="Email not found")
         
         email.is_read = is_read
-        from datetime import datetime
         email.updated_at = datetime.utcnow()
     
     return {
         "success": True,
         "email_id": email_id,
         "is_read": is_read
+    }
+
+@app.put("/email/{email_id}/star")
+async def mark_email_starred(
+    email_id: str,
+    is_starred: bool = True,
+    x_user_id: str = Header(None)
+):
+    """Mark email as starred/unstarred"""
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="User ID required")
+    
+    with get_db() as db:
+        email = db.query(Email).filter(
+            Email.user_id == x_user_id,
+            Email.gmail_message_id == email_id
+        ).first()
+        
+        if not email:
+            raise HTTPException(status_code=404, detail="Email not found")
+        
+        email.is_starred = is_starred
+        email.updated_at = datetime.utcnow()
+    
+    return {
+        "success": True,
+        "email_id": email_id,
+        "is_starred": is_starred,
+        "message": f"Email {'starred' if is_starred else 'unstarred'} successfully"
+    }
+
+@app.put("/email/{email_id}/category")
+async def update_email_category(
+    email_id: str,
+    category_data: CategoryUpdate,
+    x_user_id: str = Header(None)
+):
+    """Update email category"""
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="User ID required")
+    
+    # Validate category length (max 100 chars based on database schema)
+    if category_data.category and len(category_data.category) > 100:
+        raise HTTPException(status_code=400, detail="Category must be 100 characters or less")
+    
+    with get_db() as db:
+        email = db.query(Email).filter(
+            Email.user_id == x_user_id,
+            Email.gmail_message_id == email_id
+        ).first()
+        
+        if not email:
+            raise HTTPException(status_code=404, detail="Email not found")
+        
+        email.category = category_data.category
+        email.updated_at = datetime.utcnow()
+    
+    return {
+        "success": True,
+        "email_id": email_id,
+        "category": category_data.category,
+        "message": "Email category updated successfully"
+    }
+
+@app.put("/email/{email_id}/urgency")
+async def update_email_urgency(
+    email_id: str,
+    urgency_data: UrgencyUpdate,
+    x_user_id: str = Header(None)
+):
+    """Update email urgency level (0-10 scale)"""
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="User ID required")
+    
+    with get_db() as db:
+        email = db.query(Email).filter(
+            Email.user_id == x_user_id,
+            Email.gmail_message_id == email_id
+        ).first()
+        
+        if not email:
+            raise HTTPException(status_code=404, detail="Email not found")
+        
+        email.urgency = urgency_data.urgency
+        email.updated_at = datetime.utcnow()
+    
+    return {
+        "success": True,
+        "email_id": email_id,
+        "urgency": urgency_data.urgency,
+        "message": "Email urgency updated successfully"
     }
 
 @app.post("/emails/bulk")

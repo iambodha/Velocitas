@@ -128,3 +128,52 @@ async def update_user_profile(
     json_data = await request.json()
     response = await forward_request(USER_SERVICE_URL, "/profile", "PUT", headers=headers, json=json_data)
     return response.json()
+
+# Email management routes
+@router.put("/email/{email_id}/read")
+async def mark_email_read(
+    email_id: str,
+    is_read: bool = Query(default=True),
+    user_id: str = Depends(require_auth)
+):
+    """Mark email as read/unread"""
+    headers = {"X-User-ID": user_id}
+    params = {"is_read": is_read}
+    response = await forward_request(EMAIL_SERVICE_URL, f"/email/{email_id}/read", "PUT", headers=headers, params=params)
+    return response.json()
+
+@router.put("/email/{email_id}/star")
+async def mark_email_starred(
+    email_id: str,
+    is_starred: bool = Query(default=True),
+    user_id: str = Depends(require_auth)
+):
+    """Mark email as starred/unstarred"""
+    headers = {"X-User-ID": user_id}
+    params = {"is_starred": is_starred}
+    response = await forward_request(EMAIL_SERVICE_URL, f"/email/{email_id}/star", "PUT", headers=headers, params=params)
+    return response.json()
+
+@router.put("/email/{email_id}/category")
+async def update_email_category(
+    email_id: str,
+    request: Request,
+    user_id: str = Depends(require_auth)
+):
+    """Update email category"""
+    headers = {"X-User-ID": user_id}
+    json_data = await request.json()
+    response = await forward_request(EMAIL_SERVICE_URL, f"/email/{email_id}/category", "PUT", headers=headers, json=json_data)
+    return response.json()
+
+@router.put("/email/{email_id}/urgency")
+async def update_email_urgency(
+    email_id: str,
+    request: Request,
+    user_id: str = Depends(require_auth)
+):
+    """Update email urgency level (0-10 scale)"""
+    headers = {"X-User-ID": user_id}
+    json_data = await request.json()
+    response = await forward_request(EMAIL_SERVICE_URL, f"/email/{email_id}/urgency", "PUT", headers=headers, json=json_data)
+    return response.json()
