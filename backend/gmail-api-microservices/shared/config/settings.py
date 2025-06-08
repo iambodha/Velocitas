@@ -6,7 +6,7 @@ load_dotenv()
 # Database Configuration
 DATABASE_URL = os.getenv(
     'DATABASE_URL', 
-    'postgresql://username:password@localhost:5432/gmail_api_db'
+    'postgresql://gmail_user:secure_password_123@localhost:5432/gmail_api_db'
 )
 
 # Redis Configuration
