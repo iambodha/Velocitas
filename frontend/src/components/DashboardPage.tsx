@@ -30,7 +30,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 
-const API_BASE = 'http://localhost:8080'; // Changed to email service port
+const API_BASE = 'http://localhost:8002'; // Email service port
 
 // Email interface
 interface Email {
@@ -50,74 +50,68 @@ interface Email {
   source?: string;
 }
 
+interface DashboardPageProps {
+  darkMode: boolean;
+  setDarkMode: (dark: boolean) => void;
+  initialSyncComplete?: boolean;
+  user?: any;
+}
+
 const sidebarItems = [
   { icon: Inbox, label: "Inbox", count: 12, active: true },
   { icon: Star, label: "Starred", count: 3 },
   { icon: FileText, label: "Drafts", count: 1 },
   { icon: Mail, label: "Sent" },
   { icon: Archive, label: "Archive" },
-  { icon: AlertCircle, label: "Spam", count: 2 },
   { icon: Trash2, label: "Trash" },
+  { icon: AlertCircle, label: "Spam" }
 ];
 
+// Define color sets for different categories
 const categoryColors = {
-  Work: {
-    bg: 'bg-blue-500',
-    bgLight: 'bg-blue-100',
-    text: 'text-blue-700',
-    darkBg: 'bg-blue-800',
-    darkText: 'text-blue-300',
-    border: 'border-blue-200'
+  "Work": {
+    bg: "bg-blue-500",
+    bgLight: "bg-blue-100",
+    text: "text-blue-700",
+    darkBg: "bg-blue-700",
+    darkText: "text-blue-300",
+    border: "border-blue-200"
   },
-  Personal: {
-    bg: 'bg-green-500',
-    bgLight: 'bg-green-100',
-    text: 'text-green-700',
-    darkBg: 'bg-green-800',
-    darkText: 'text-green-300',
-    border: 'border-green-200'
+  "Personal": {
+    bg: "bg-purple-500",
+    bgLight: "bg-purple-100",
+    text: "text-purple-700",
+    darkBg: "bg-purple-700",
+    darkText: "text-purple-300",
+    border: "border-purple-200"
   },
-  Finance: {
-    bg: 'bg-purple-500',
-    bgLight: 'bg-purple-100',
-    text: 'text-purple-700',
-    darkBg: 'bg-purple-800',
-    darkText: 'text-purple-300',
-    border: 'border-purple-200'
+  "Finance": {
+    bg: "bg-green-500",
+    bgLight: "bg-green-100",
+    text: "text-green-700",
+    darkBg: "bg-green-700",
+    darkText: "text-green-300",
+    border: "border-green-200"
   },
-  Updates: {
-    bg: 'bg-orange-500',
-    bgLight: 'bg-orange-100',
-    text: 'text-orange-700',
-    darkBg: 'bg-orange-800', 
-    darkText: 'text-orange-300',
-    border: 'border-orange-200'
+  "Updates": {
+    bg: "bg-yellow-500",
+    bgLight: "bg-yellow-100",
+    text: "text-yellow-700",
+    darkBg: "bg-yellow-700",
+    darkText: "text-yellow-300",
+    border: "border-yellow-200"
   },
-  Social: {
-    bg: 'bg-pink-500',
-    bgLight: 'bg-pink-100',
-    text: 'text-pink-700',
-    darkBg: 'bg-pink-800',
-    darkText: 'text-pink-300',
-    border: 'border-pink-200'
-  },
-  Design: {
-    bg: 'bg-indigo-500',
-    bgLight: 'bg-indigo-100',
-    text: 'text-indigo-700',
-    darkBg: 'bg-indigo-800',
-    darkText: 'text-indigo-300',
-    border: 'border-indigo-200'
+  "Social": {
+    bg: "bg-red-500",
+    bgLight: "bg-red-100",
+    text: "text-red-700",
+    darkBg: "bg-red-700",
+    darkText: "text-red-300",
+    border: "border-red-200"
   }
 };
 
-interface DashboardPageProps {
-  darkMode: boolean;
-  setDarkMode: (dark: boolean) => void;
-  initialSyncComplete?: boolean; // Add this line
-}
-
-export default function DashboardPage({ darkMode, setDarkMode, initialSyncComplete = false }: DashboardPageProps) {
+export default function DashboardPage({ darkMode, setDarkMode, initialSyncComplete = false, user }: DashboardPageProps) {
   const [emails, setEmails] = useState<Email[]>([]);
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -134,11 +128,9 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
   const [syncing, setSyncing] = useState(false);
   const [showSyncStatus, setShowSyncStatus] = useState(false);
 
-  // Get user token and ID from localStorage
+  // Helper function to get auth headers
   const getAuthHeaders = () => {
-    const token = localStorage.getItem('gmail_token');
-    const userId = localStorage.getItem('user_id') || localStorage.getItem('user_email');
-    
+    const token = localStorage.getItem('supabase_token');
     return {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json'
@@ -147,15 +139,21 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
 
   // Fetch emails from API
   const fetchEmails = async () => {
+    setLoading(true);
+    setError(null);
+    
     try {
-      setLoading(true);
-      setError(null);
-      
-      const response = await fetch(`${API_BASE}/emails?limit=50&offset=0`, {
+      const response = await fetch(`${API_BASE}/emails?max_results=50`, {
         headers: getAuthHeaders()
       });
 
       if (!response.ok) {
+        if (response.status === 403) {
+          // Gmail access not granted
+          setError('Gmail access required. Please connect your Google account.');
+          checkGmailAccess();
+          return;
+        }
         throw new Error(`Failed to fetch emails: ${response.statusText}`);
       }
 
@@ -379,8 +377,11 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
 
   // Fetch emails on component mount and when initial sync completes
   useEffect(() => {
-    fetchEmails();
-  }, [initialSyncComplete]); // Added initialSyncComplete as dependency
+    if (user) {
+      fetchEmails();
+      checkGmailAccess();
+    }
+  }, [user]);
 
   // Inject email-specific CSS styles for Gmail-like rendering
   useEffect(() => {
@@ -663,31 +664,84 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
     }
   };
 
-  // Add logout functionality
+  // Handle logout
   const handleLogout = async () => {
     try {
-      const token = localStorage.getItem('gmail_token');
-      if (token) {
-        await fetch(`${API_BASE}/logout`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          }
-        });
-      }
+      // Call logout endpoint
+      await fetch('http://localhost:8001/signout', {
+        method: 'POST',
+        headers: getAuthHeaders()
+      });
     } catch (error) {
-      console.error('Server logout failed:', error);
+      console.error('Logout error:', error);
     } finally {
-      // Clear local data regardless
-      localStorage.removeItem('gmail_token');
-      localStorage.removeItem('user_email');
-      localStorage.removeItem('user_id');
+      // Clear local storage
+      localStorage.removeItem('supabase_token');
+      localStorage.removeItem('supabase_refresh_token');
+      localStorage.removeItem('user_data');
       
-      // Refresh page to show landing page
+      // Reload page to trigger auth check
       window.location.reload();
     }
   };
+
+  // Check Gmail access status
+  const checkGmailAccess = async () => {
+    try {
+      const response = await fetch('http://localhost:8001/gmail/status', {
+        headers: getAuthHeaders()
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (!data.gmail_access) {
+          // Show Gmail auth flow
+          showGmailAuthFlow();
+        }
+      }
+    } catch (error) {
+      console.error('Gmail access check failed:', error);
+    }
+  };
+
+  // Show Gmail authentication flow
+  const showGmailAuthFlow = async () => {
+    try {
+      const response = await fetch('http://localhost:8001/auth/google', {
+        headers: getAuthHeaders()
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        
+        const popup = window.open(
+          data.authorization_url,
+          'gmail_auth',
+          'width=500,height=600,scrollbars=yes,resizable=yes,location=yes'
+        );
+        
+        if (popup) {
+          const checkClosed = setInterval(() => {
+            if (popup.closed) {
+              clearInterval(checkClosed);
+              // Refresh emails after Gmail auth
+              fetchEmails();
+            }
+          }, 1000);
+        }
+      }
+    } catch (error) {
+      console.error('Gmail auth flow error:', error);
+    }
+  };
+
+  // Initial load
+  useEffect(() => {
+    if (user) {
+      fetchEmails();
+      checkGmailAccess();
+    }
+  }, [user]);
 
   return (
     <div className={`h-screen flex overflow-hidden ${darkMode ? 'dark bg-gray-900' : 'bg-white'}`}>
@@ -1165,12 +1219,15 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
             </div>
             
             <div className="p-4">
-              <div className="mb-4">
-                <label className={`flex items-center cursor-pointer`}>
-                  <div className={`relative`}>
-                    <input 
-                      type="checkbox" 
-                      className="sr-only" 
+              <div className="mb-6">
+                <h4 className={`text-md font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'} mb-3`}>
+                  Appearance
+                </h4>
+                <label className="flex items-center cursor-pointer">
+                  <div className="relative">
+                    <input
+                      type="checkbox"
+                      className="sr-only"
                       checked={darkMode}
                       onChange={() => setDarkMode(!darkMode)}
                     />
@@ -1188,12 +1245,20 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
                   Account
                 </h4>
                 <div className={`mt-2 ${darkMode ? 'bg-gray-700' : 'bg-gray-50'} p-3 rounded-lg border`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className={`text-sm ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                      Name
+                    </span>
+                    <span className={`text-sm font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>
+                      {user?.name || 'Not set'}
+                    </span>
+                  </div>
                   <div className="flex items-center justify-between">
                     <span className={`text-sm ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                       Email
                     </span>
                     <span className={`text-sm font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>
-                      {localStorage.getItem('user_email')}
+                      {user?.email}
                     </span>
                   </div>
                 </div>
