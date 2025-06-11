@@ -4,6 +4,7 @@
 import base64
 import json
 import uuid
+import logging
 from datetime import datetime
 from typing import Optional
 from google.oauth2.credentials import Credentials
@@ -12,6 +13,9 @@ from sqlalchemy.orm import Session
 from ..models.user import User
 from ..database.db import get_db
 from contextlib import contextmanager
+
+# Setup logger
+logger = logging.getLogger(__name__)
 
 @contextmanager
 def get_db_context():
@@ -90,36 +94,41 @@ class SecureCredentialManager:
             return str(user.id)
     
     def load_credentials(self, user_id: str) -> Optional[Credentials]:
-        """Load and decrypt user credentials"""
+        """Load and validate user credentials, refresh if needed"""
         with get_db_context() as db:
-            user = db.query(User).filter(
-                User.id == user_id,
-                User.is_active == True
-            ).first()
-            
+            user = db.query(User).filter(User.id == user_id, User.is_active == True).first()
             if not user or not user.encrypted_credentials:
                 return None
             
             try:
-                creds_data = self._decrypt_credentials(user.encrypted_credentials)
-                
+                creds_dict = self._decrypt_credentials(user.encrypted_credentials)
                 creds = Credentials(
-                    token=creds_data['token'],
-                    refresh_token=creds_data.get('refresh_token'),
-                    token_uri=creds_data['token_uri'],
-                    client_id=creds_data['client_id'],
-                    client_secret=creds_data['client_secret'],
-                    scopes=creds_data['scopes']
+                    token=creds_dict.get('token'),
+                    refresh_token=creds_dict.get('refresh_token'),
+                    token_uri=creds_dict.get('token_uri'),
+                    client_id=creds_dict.get('client_id'),
+                    client_secret=creds_dict.get('client_secret'),
+                    scopes=creds_dict.get('scopes')
                 )
                 
-                # Refresh if expired
-                if creds.expired and creds.refresh_token:
-                    creds.refresh(GoogleRequest())
-                    self._update_credentials(user_id, creds)
+                # Check if credentials are expired and refresh if needed
+                if not creds.valid:
+                    if creds.expired and creds.refresh_token:
+                        try:
+                            creds.refresh(GoogleRequest())
+                            # Update credentials in database
+                            self._update_credentials(user_id, creds)
+                            logger.info(f"Refreshed credentials for user {user_id}")
+                        except Exception as e:
+                            logger.error(f"Failed to refresh credentials for user {user_id}: {e}")
+                            return None
+                    else:
+                        logger.warning(f"Invalid credentials for user {user_id}, no refresh token available")
+                        return None
                 
                 return creds
             except Exception as e:
-                print(f"Error loading credentials for user {user_id}: {e}")
+                logger.error(f"Error loading credentials for user {user_id}: {e}")
                 return None
     
     def _update_credentials(self, user_id: str, creds: Credentials):

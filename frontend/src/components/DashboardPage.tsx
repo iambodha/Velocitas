@@ -30,7 +30,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 
-const API_BASE = 'http://localhost:5002'; // Changed to email service port
+const API_BASE = 'http://localhost:8080'; // Changed to email service port
 
 // Email interface
 interface Email {
@@ -114,9 +114,10 @@ const categoryColors = {
 interface DashboardPageProps {
   darkMode: boolean;
   setDarkMode: (dark: boolean) => void;
+  initialSyncComplete?: boolean; // Add this line
 }
 
-export default function DashboardPage({ darkMode, setDarkMode }: DashboardPageProps) {
+export default function DashboardPage({ darkMode, setDarkMode, initialSyncComplete = false }: DashboardPageProps) {
   const [emails, setEmails] = useState<Email[]>([]);
   const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -130,9 +131,19 @@ export default function DashboardPage({ darkMode, setDarkMode }: DashboardPagePr
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filteredEmails, setFilteredEmails] = useState<Email[]>([]);
+  const [syncing, setSyncing] = useState(false);
+  const [showSyncStatus, setShowSyncStatus] = useState(false);
 
-  // Get user token from localStorage
-  const getUserId = () => localStorage.getItem('user_id') || localStorage.getItem('user_email');
+  // Get user token and ID from localStorage
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('gmail_token');
+    const userId = localStorage.getItem('user_id') || localStorage.getItem('user_email');
+    
+    return {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    };
+  };
 
   // Fetch emails from API
   const fetchEmails = async () => {
@@ -140,16 +151,8 @@ export default function DashboardPage({ darkMode, setDarkMode }: DashboardPagePr
       setLoading(true);
       setError(null);
       
-      const userId = getUserId();
-      if (!userId) {
-        throw new Error('No user ID found');
-      }
-
       const response = await fetch(`${API_BASE}/emails?limit=50&offset=0`, {
-        headers: {
-          'X-User-ID': userId,
-          'Content-Type': 'application/json'
-        }
+        headers: getAuthHeaders()
       });
 
       if (!response.ok) {
@@ -177,14 +180,8 @@ export default function DashboardPage({ darkMode, setDarkMode }: DashboardPagePr
   // Fetch detailed email content
   const fetchEmailDetails = async (emailId: string): Promise<Email | null> => {
     try {
-      const userId = getUserId();
-      if (!userId) return null;
-
       const response = await fetch(`${API_BASE}/email/${emailId}`, {
-        headers: {
-          'X-User-ID': userId,
-          'Content-Type': 'application/json'
-        }
+        headers: getAuthHeaders()
       });
 
       if (!response.ok) {
@@ -201,15 +198,9 @@ export default function DashboardPage({ darkMode, setDarkMode }: DashboardPagePr
   // Mark email as read
   const markEmailAsRead = async (emailId: string, isRead: boolean = true) => {
     try {
-      const userId = getUserId();
-      if (!userId) return;
-
       await fetch(`${API_BASE}/email/${emailId}/read?is_read=${isRead}`, {
         method: 'PUT',
-        headers: {
-          'X-User-ID': userId,
-          'Content-Type': 'application/json'
-        }
+        headers: getAuthHeaders()
       });
 
       // Update local state
@@ -227,15 +218,9 @@ export default function DashboardPage({ darkMode, setDarkMode }: DashboardPagePr
   // Toggle email star
   const toggleEmailStar = async (emailId: string, isStarred: boolean) => {
     try {
-      const userId = getUserId();
-      if (!userId) return;
-
       await fetch(`${API_BASE}/email/${emailId}/star?is_starred=${isStarred}`, {
         method: 'PUT',
-        headers: {
-          'X-User-ID': userId,
-          'Content-Type': 'application/json'
-        }
+        headers: getAuthHeaders()
       });
 
       // Update local state
@@ -254,6 +239,26 @@ export default function DashboardPage({ darkMode, setDarkMode }: DashboardPagePr
     }
   };
 
+  // Sync emails from Gmail
+  const syncEmails = async () => {
+    try {
+      setSyncing(true);
+      const response = await fetch(`${API_BASE}/emails/sync`, {
+        method: 'POST',
+        headers: getAuthHeaders()
+      });
+
+      if (response.ok) {
+        // Refresh emails after sync
+        await fetchEmails();
+      }
+    } catch (error) {
+      console.error('Error syncing emails:', error);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   // Search emails
   const searchEmails = async (query: string) => {
     if (!query.trim()) {
@@ -262,14 +267,8 @@ export default function DashboardPage({ darkMode, setDarkMode }: DashboardPagePr
     }
 
     try {
-      const userId = getUserId();
-      if (!userId) return;
-
       const response = await fetch(`${API_BASE}/emails/search?q=${encodeURIComponent(query)}&limit=50`, {
-        headers: {
-          'X-User-ID': userId,
-          'Content-Type': 'application/json'
-        }
+        headers: getAuthHeaders()
       });
 
       if (response.ok) {
@@ -362,10 +361,26 @@ export default function DashboardPage({ darkMode, setDarkMode }: DashboardPagePr
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Fetch emails on component mount
+  // Show sync status message when initial sync is happening
+  useEffect(() => {
+    if (!initialSyncComplete) {
+      setShowSyncStatus(true);
+      
+      // Hide sync status after 10 seconds if sync doesn't complete
+      const timer = setTimeout(() => {
+        setShowSyncStatus(false);
+      }, 10000);
+      
+      return () => clearTimeout(timer);
+    } else {
+      setShowSyncStatus(false);
+    }
+  }, [initialSyncComplete]);
+
+  // Fetch emails on component mount and when initial sync completes
   useEffect(() => {
     fetchEmails();
-  }, []);
+  }, [initialSyncComplete]); // Added initialSyncComplete as dependency
 
   // Inject email-specific CSS styles for Gmail-like rendering
   useEffect(() => {
@@ -653,11 +668,11 @@ export default function DashboardPage({ darkMode, setDarkMode }: DashboardPagePr
     try {
       const token = localStorage.getItem('gmail_token');
       if (token) {
-        // Try to logout on server
         await fetch(`${API_BASE}/logout`, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${token}`
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
           }
         });
       }
@@ -676,8 +691,20 @@ export default function DashboardPage({ darkMode, setDarkMode }: DashboardPagePr
 
   return (
     <div className={`h-screen flex overflow-hidden ${darkMode ? 'dark bg-gray-900' : 'bg-white'}`}>
+      {/* Sync Status Banner */}
+      {showSyncStatus && !initialSyncComplete && (
+        <div className={`fixed top-0 left-0 right-0 z-40 p-3 text-center ${darkMode ? 'bg-yellow-800 text-yellow-200' : 'bg-yellow-100 text-yellow-800'} border-b`}>
+          <div className="flex items-center justify-center gap-2">
+            <RefreshCw size={16} className="animate-spin" />
+            <span className="text-sm font-medium">
+              Syncing your emails from Gmail...
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Sidebar - responsive */}
-      <div className={`${sidebarOpen ? 'w-64' : 'w-16'} ${isMobileView && !sidebarOpen ? 'hidden' : ''} ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200'} border-r transition-all duration-300 flex flex-col`}>
+      <div className={`${sidebarOpen ? 'w-64' : 'w-16'} ${isMobileView && !sidebarOpen ? 'hidden' : ''} ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200'} border-r transition-all duration-300 flex flex-col ${showSyncStatus && !initialSyncComplete ? 'mt-12' : ''}`}>
         {/* Menu button - moved to top of sidebar */}
         <div className={`px-4 py-4 flex ${sidebarOpen ? 'justify-between' : 'justify-center'} items-center border-b ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
           {sidebarOpen && (
@@ -782,7 +809,7 @@ export default function DashboardPage({ darkMode, setDarkMode }: DashboardPagePr
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className={`flex-1 flex flex-col overflow-hidden ${showSyncStatus && !initialSyncComplete ? 'mt-12' : ''}`}>
         {/* Header */}
         <header className={`border-b px-4 md:px-6 py-4 flex items-center gap-3 md:gap-4 ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}>
           <div className="flex-1 max-w-2xl flex items-center gap-3">
@@ -810,6 +837,19 @@ export default function DashboardPage({ darkMode, setDarkMode }: DashboardPagePr
               } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
               <RefreshCw size={18} className={`${loading ? 'animate-spin' : ''} ${darkMode ? 'text-gray-300' : 'text-gray-600'}`} />
+            </button>
+            
+            {/* Sync Button */}
+            <button 
+              onClick={syncEmails}
+              disabled={syncing}
+              className={`p-2 rounded-lg transition-colors ${
+                darkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-100 text-gray-600'
+              } ${syncing ? 'opacity-50 cursor-not-allowed' : ''}`}
+              title="Sync from Gmail"
+            >
+              <RefreshCw size={18} className={`${syncing ? 'animate-spin' : ''}`} />
+              {!isMobileView && <span className="ml-1 text-sm">Sync Gmail</span>}
             </button>
             
             {/* AI Overview Button */}

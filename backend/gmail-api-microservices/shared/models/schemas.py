@@ -61,6 +61,20 @@ class Email(Base):
     category = Column(String(100), nullable=True, index=True)
     urgency = Column(Integer, default=0, nullable=True)
     
+    # Enhanced content fields
+    processed_html = Column(Text, nullable=True)  # For processed HTML with inline images
+    thread_id = Column(String(255), nullable=True, index=True)  # Gmail thread ID
+    
+    # Enhanced metadata
+    attachments_count = Column(Integer, default=0)
+    has_attachments = Column(Boolean, default=False, index=True)
+    security_score = Column(Integer, default=0)  # Security/TLS score
+    
+    # Advanced categorization
+    is_newsletter = Column(Boolean, default=False, index=True)
+    is_promotional = Column(Boolean, default=False, index=True)
+    is_automated = Column(Boolean, default=False, index=True)
+    
     # Composite indexes for efficient queries
     __table_args__ = (
         Index('idx_email_user_gmail_id', 'user_id', 'gmail_message_id', unique=True),
@@ -70,4 +84,69 @@ class Email(Base):
         Index('idx_email_starred', 'user_id', 'is_starred'),
         Index('idx_email_category', 'user_id', 'category'),
         Index('idx_email_urgency', 'user_id', 'urgency'),
+        Index('idx_email_thread', 'user_id', 'thread_id'),
+        Index('idx_email_attachments', 'user_id', 'has_attachments'),
+        Index('idx_email_newsletter', 'user_id', 'is_newsletter'),
+        Index('idx_email_promotional', 'user_id', 'is_promotional'),
+        Index('idx_email_security', 'user_id', 'security_score'),
+    )
+
+# New table for attachments
+class EmailAttachment(Base):
+    """Dedicated table for email attachments"""
+    __tablename__ = 'email_attachments'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    gmail_attachment_id = Column(String(255), nullable=False)
+    
+    filename = Column(String(500), nullable=False)
+    mime_type = Column(String(100), nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    
+    # Attachment metadata
+    is_inline = Column(Boolean, default=False)
+    content_id = Column(String(255), nullable=True)
+    
+    # File analysis
+    is_safe = Column(Boolean, nullable=True)
+    virus_scan_result = Column(String(50), nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        Index('idx_attachment_email', 'email_id'),
+        Index('idx_attachment_gmail_id', 'gmail_attachment_id'),
+        Index('idx_attachment_type', 'mime_type'),
+        Index('idx_attachment_size', 'size_bytes'),
+    )
+
+# New table for email analytics
+class EmailAnalytics(Base):
+    """Table for storing email analytics and insights"""
+    __tablename__ = 'email_analytics'
+    
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    
+    # Daily analytics
+    date = Column(DateTime, nullable=False, index=True)
+    emails_received = Column(Integer, default=0)
+    emails_read = Column(Integer, default=0)
+    emails_starred = Column(Integer, default=0)
+    
+    # Category breakdown
+    promotional_count = Column(Integer, default=0)
+    newsletter_count = Column(Integer, default=0)
+    automated_count = Column(Integer, default=0)
+    important_count = Column(Integer, default=0)
+    
+    # Security metrics
+    tls_emails = Column(Integer, default=0)
+    suspicious_emails = Column(Integer, default=0)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    __table_args__ = (
+        Index('idx_analytics_user_date', 'user_id', 'date', unique=True),
     )

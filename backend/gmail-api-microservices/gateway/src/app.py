@@ -1,6 +1,6 @@
 # File: /gmail-api-microservices/gmail-api-microservices/gateway/src/app.py
 #Tested
-from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi import FastAPI, Request, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import HTMLResponse
@@ -26,8 +26,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Service URLs
-AUTH_SERVICE_URL = os.getenv('AUTH_SERVICE_URL', 'http://localhost:8001')  # Changed from 5000 to 8001
+# Service URLs - Fix: Use correct auth service port
+AUTH_SERVICE_URL = os.getenv('AUTH_SERVICE_URL', 'http://localhost:8001')
 GMAIL_SERVICE_URL = os.getenv('GMAIL_SERVICE_URL', 'http://localhost:5001')
 EMAIL_SERVICE_URL = os.getenv('EMAIL_SERVICE_URL', 'http://localhost:5002')
 USER_SERVICE_URL = os.getenv('USER_SERVICE_URL', 'http://localhost:5003')
@@ -41,9 +41,23 @@ async def verify_token(authorization: Optional[HTTPAuthorizationCredentials] = D
         return None
     
     try:
+        # Try local JWT verification first
         payload = jwt.decode(authorization.credentials, JWT_SECRET, algorithms=['HS256'])
         return payload.get('user_id')
     except jwt.InvalidTokenError:
+        # If local verification fails, try auth service
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{AUTH_SERVICE_URL}/verify",
+                    headers={"Authorization": f"Bearer {authorization.credentials}"}
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    return data.get('user_id')
+        except:
+            pass
         return None
 
 async def forward_request(service_url: str, path: str, method: str, headers: dict = None, json_data: dict = None, params: dict = None):
@@ -170,106 +184,6 @@ async def logout(user_id: str = Depends(verify_token)):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Error during logout: {str(e)}")
 
-# Email service routes
-@app.get("/emails")
-async def get_emails(request: Request, user_id: str = Depends(verify_token)):
-    """Get user emails"""
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    
-    try:
-        headers = {"X-User-ID": user_id}
-        params = dict(request.query_params)
-        response = await forward_request(EMAIL_SERVICE_URL, "/emails", "GET", headers=headers, params=params)
-        
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail="Failed to fetch emails")
-        
-        return response.json()
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=503, detail=f"Email service unavailable: {str(e)}")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Error fetching emails: {str(e)}")
-
-@app.get("/email/{email_id}")
-async def get_email(email_id: str, user_id: str = Depends(verify_token)):
-    """Get specific email"""
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    
-    try:
-        headers = {"X-User-ID": user_id}
-        response = await forward_request(EMAIL_SERVICE_URL, f"/email/{email_id}", "GET", headers=headers)
-        
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail="Email not found")
-        
-        return response.json()
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=503, detail=f"Email service unavailable: {str(e)}")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Error fetching email: {str(e)}")
-
-@app.get("/emails/search")
-async def search_emails(request: Request, user_id: str = Depends(verify_token)):
-    """Search emails"""
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    
-    try:
-        headers = {"X-User-ID": user_id}
-        params = dict(request.query_params)
-        response = await forward_request(EMAIL_SERVICE_URL, "/emails/search", "GET", headers=headers, params=params)
-        
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail="Search failed")
-        
-        return response.json()
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=503, detail=f"Email service unavailable: {str(e)}")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Error searching emails: {str(e)}")
-
-@app.get("/emails/stats")
-async def get_email_stats(user_id: str = Depends(verify_token)):
-    """Get email statistics"""
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    
-    try:
-        headers = {"X-User-ID": user_id}
-        response = await forward_request(EMAIL_SERVICE_URL, "/emails/stats", "GET", headers=headers)
-        
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail="Failed to get stats")
-        
-        return response.json()
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=503, detail=f"Email service unavailable: {str(e)}")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Error getting stats: {str(e)}")
-
-# Gmail service routes
-@app.post("/emails/sync")
-async def sync_emails(request: Request, user_id: str = Depends(verify_token)):
-    """Trigger email sync"""
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    
-    try:
-        headers = {"X-User-ID": user_id}
-        params = dict(request.query_params)
-        response = await forward_request(GMAIL_SERVICE_URL, "/sync", "POST", headers=headers, params=params)
-        
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail="Sync failed")
-        
-        return response.json()
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=503, detail=f"Gmail service unavailable: {str(e)}")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Error syncing emails: {str(e)}")
-
 # User service routes
 @app.get("/user/profile")
 async def get_user_profile(user_id: str = Depends(verify_token)):
@@ -309,6 +223,103 @@ async def update_user_profile(request: Request, user_id: str = Depends(verify_to
         raise HTTPException(status_code=503, detail=f"User service unavailable: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Error updating profile: {str(e)}")
+
+@app.get("/emails")
+async def get_emails(
+    request: Request,
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    user_id: str = Depends(verify_token)
+):
+    """Get user emails"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    headers = {"X-User-ID": user_id}
+    params = {"limit": limit, "offset": offset}
+    
+    response = await forward_request(
+        EMAIL_SERVICE_URL, 
+        "/emails", 
+        "GET", 
+        headers=headers, 
+        params=params
+    )
+    
+    if response.status_code == 200:
+        return response.json()
+    else:
+        raise HTTPException(status_code=response.status_code, detail="Failed to fetch emails")
+
+@app.get("/email/{email_id}")
+async def get_email(
+    email_id: str,
+    user_id: str = Depends(verify_token)
+):
+    """Get specific email"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    headers = {"X-User-ID": user_id}
+    
+    response = await forward_request(
+        EMAIL_SERVICE_URL, 
+        f"/email/{email_id}", 
+        "GET", 
+        headers=headers
+    )
+    
+    if response.status_code == 200:
+        return response.json()
+    else:
+        raise HTTPException(status_code=response.status_code, detail="Failed to fetch email")
+
+@app.get("/emails/search")
+async def search_emails(
+    request: Request,
+    user_id: str = Depends(verify_token)
+):
+    """Search emails"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    headers = {"X-User-ID": user_id}
+    params = dict(request.query_params)
+    
+    response = await forward_request(
+        EMAIL_SERVICE_URL, 
+        "/emails/search", 
+        "GET", 
+        headers=headers, 
+        params=params
+    )
+    
+    if response.status_code == 200:
+        return response.json()
+    else:
+        raise HTTPException(status_code=response.status_code, detail="Failed to search emails")
+
+@app.post("/emails/sync")
+async def sync_emails(
+    user_id: str = Depends(verify_token)
+):
+    """Sync emails from Gmail"""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    headers = {"X-User-ID": user_id}
+    
+    response = await forward_request(
+        EMAIL_SERVICE_URL, 
+        "/emails/sync", 
+        "POST", 
+        headers=headers
+    )
+    
+    if response.status_code == 200:
+        return response.json()
+    else:
+        raise HTTPException(status_code=response.status_code, detail="Failed to sync emails")
 
 if __name__ == "__main__":
     import uvicorn

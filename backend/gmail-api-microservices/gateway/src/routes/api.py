@@ -1,11 +1,11 @@
 # File: /gmail-api-microservices/gmail-api-microservices/gateway/src/routes/api.py
 #Tested
 
-from fastapi import APIRouter, Request, Depends, Query
-from fastapi.responses import JSONResponse
-from ..middleware.auth import verify_token, require_auth
+from fastapi import APIRouter, Request, Depends, Query, HTTPException
+from fastapi.responses import JSONResponse, HTMLResponse  # Add HTMLResponse
 import httpx
 import os
+from ..middleware.auth import verify_token, require_auth
 
 router = APIRouter()
 
@@ -29,7 +29,7 @@ async def forward_request(service_url: str, path: str, method: str, **kwargs):
         elif method.upper() == "DELETE":
             response = await client.delete(url, **kwargs)
         else:
-            raise ValueError(f"Unsupported HTTP method: {method}")
+            raise HTTPException(status_code=400, detail=f"Unsupported method: {method}")
     
     return response
 
@@ -43,9 +43,59 @@ async def get_auth_url():
 @router.get("/callback")
 async def oauth_callback(request: Request):
     """Handle OAuth callback"""
-    params = dict(request.query_params)
-    response = await forward_request(AUTH_SERVICE_URL, "/callback", "GET", params=params)
-    return response.json()
+    # Forward the callback to auth service
+    query_params = str(request.url.query)
+    response = await forward_request(
+        AUTH_SERVICE_URL, 
+        f"/callback?{query_params}", 
+        "GET"
+    )
+    
+    if response.status_code == 200:
+        # Get the response data
+        auth_data = response.json()
+        
+        # Return HTML that communicates with parent window
+        return HTMLResponse(content=f"""
+            <html>
+                <body>
+                    <script>
+                        window.opener.postMessage({{
+                            type: 'GMAIL_AUTH_SUCCESS',
+                            token: '{auth_data.get("session_token", "")}',
+                            user_email: '{auth_data.get("email", "")}',
+                            user_id: '{auth_data.get("user_id", "")}',
+                            user_name: '{auth_data.get("name", "")}'
+                        }}, window.location.origin);
+                        window.close();
+                    </script>
+                    <p>Authentication successful! This window will close automatically.</p>
+                </body>
+            </html>
+        """)
+    else:
+        # Handle error case
+        error_detail = "Authentication failed"
+        try:
+            error_response = response.json()
+            error_detail = error_response.get("detail", error_detail)
+        except:
+            pass
+            
+        return HTMLResponse(content=f"""
+            <html>
+                <body>
+                    <script>
+                        window.opener.postMessage({{
+                            type: 'GMAIL_AUTH_ERROR',
+                            error: '{error_detail}'
+                        }}, window.location.origin);
+                        window.close();
+                    </script>
+                    <p>Authentication failed: {error_detail}</p>
+                </body>
+            </html>
+        """)
 
 @router.get("/status")
 async def auth_status(user_id: str = Depends(require_auth)):
@@ -99,12 +149,85 @@ async def get_email_stats(user_id: str = Depends(require_auth)):
     return response.json()
 
 # Gmail service routes
+@router.get("/gmail/profile")
+async def get_gmail_profile(user_id: str = Depends(require_auth)):
+    """Get Gmail user profile"""
+    headers = {"X-User-ID": user_id}
+    response = await forward_request(GMAIL_SERVICE_URL, "/profile", "GET", headers=headers)
+    return response.json()
+
+@router.post("/gmail/threads/list")
+async def list_gmail_threads(
+    request: Request,
+    user_id: str = Depends(require_auth)
+):
+    """List Gmail threads with sophisticated filtering"""
+    headers = {"X-User-ID": user_id}
+    json_data = await request.json()
+    response = await forward_request(GMAIL_SERVICE_URL, "/threads/list", "POST", headers=headers, json=json_data)
+    return response.json()
+
+@router.get("/gmail/threads/{thread_id}")
+async def get_gmail_thread(
+    thread_id: str,
+    user_id: str = Depends(require_auth)
+):
+    """Get complete Gmail thread"""
+    headers = {"X-User-ID": user_id}
+    response = await forward_request(GMAIL_SERVICE_URL, f"/threads/{thread_id}", "GET", headers=headers)
+    return response.json()
+
+@router.get("/gmail/messages/{message_id}/attachments/{attachment_id}")
+async def get_gmail_attachment(
+    message_id: str,
+    attachment_id: str,
+    user_id: str = Depends(require_auth)
+):
+    """Get Gmail attachment"""
+    headers = {"X-User-ID": user_id}
+    response = await forward_request(GMAIL_SERVICE_URL, f"/messages/{message_id}/attachments/{attachment_id}", "GET", headers=headers)
+    return response.json()
+
+@router.post("/gmail/threads/mark-read")
+async def mark_gmail_threads_read(
+    request: Request,
+    user_id: str = Depends(require_auth)
+):
+    """Mark Gmail threads as read"""
+    headers = {"X-User-ID": user_id}
+    json_data = await request.json()
+    response = await forward_request(GMAIL_SERVICE_URL, "/threads/mark-read", "POST", headers=headers, json=json_data)
+    return response.json()
+
+@router.post("/gmail/threads/mark-unread")
+async def mark_gmail_threads_unread(
+    request: Request,
+    user_id: str = Depends(require_auth)
+):
+    """Mark Gmail threads as unread"""
+    headers = {"X-User-ID": user_id}
+    json_data = await request.json()
+    response = await forward_request(GMAIL_SERVICE_URL, "/threads/mark-unread", "POST", headers=headers, json=json_data)
+    return response.json()
+
+@router.get("/gmail/search")
+async def search_gmail(
+    request: Request,
+    user_id: str = Depends(require_auth)
+):
+    """Search Gmail with sophisticated filtering"""
+    headers = {"X-User-ID": user_id}
+    params = dict(request.query_params)
+    response = await forward_request(GMAIL_SERVICE_URL, "/search", "GET", headers=headers, params=params)
+    return response.json()
+
+# Update your existing sync endpoint
 @router.post("/emails/sync")
 async def sync_emails(
     request: Request,
     user_id: str = Depends(require_auth)
 ):
-    """Trigger email sync"""
+    """Trigger email sync with sophisticated parsing"""
     headers = {"X-User-ID": user_id}
     params = dict(request.query_params)
     response = await forward_request(GMAIL_SERVICE_URL, "/sync", "POST", headers=headers, params=params)

@@ -28,8 +28,8 @@ SCOPES = [
     'openid'
 ]
 
-# Service URLs
-AUTH_SERVICE_URL = os.getenv('AUTH_SERVICE_URL', 'http://localhost:5000')
+# Service URLs - Fixed: Use correct auth service port
+AUTH_SERVICE_URL = os.getenv('AUTH_SERVICE_URL', 'http://localhost:8001')
 GMAIL_SERVICE_URL = os.getenv('GMAIL_SERVICE_URL', 'http://localhost:5001')
 EMAIL_SERVICE_URL = os.getenv('EMAIL_SERVICE_URL', 'http://localhost:5002')
 USER_SERVICE_URL = os.getenv('USER_SERVICE_URL', 'http://localhost:5003')

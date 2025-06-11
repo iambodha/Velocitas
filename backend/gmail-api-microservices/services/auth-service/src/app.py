@@ -1,7 +1,7 @@
 # File: /gmail-api-microservices/gmail-api-microservices/services/auth-service/src/app.py
 #Tested
 
-from fastapi import FastAPI, Request, HTTPException, Header
+from fastapi import FastAPI, Request, HTTPException, Header, Depends
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from google_auth_oauthlib.flow import Flow
@@ -16,11 +16,17 @@ from datetime import datetime, timedelta
 from typing import Optional
 from dotenv import load_dotenv
 import requests
-from .database.db import get_db
+import logging
+from .database.db import get_db, SessionLocal
 from .models.user import User
 from .utils.jwt_utils import create_session_token, verify_session_token
 from .handlers.auth import SecureCredentialManager
 from pathlib import Path
+from sqlalchemy.orm import Session
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -43,7 +49,8 @@ app.add_middleware(
 
 # Configuration
 CLIENT_SECRET_PATH = os.getenv('GOOGLE_CLIENT_SECRET_PATH', '../client_secret.json')
-REDIRECT_URI = os.getenv('REDIRECT_URI', 'http://localhost:8080/callback')
+# Change this to use the gateway URL since that's where the callback route is
+REDIRECT_URI = os.getenv('REDIRECT_URI', 'http://localhost:8080/callback')  # Keep as 8080 for gateway
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly', 
     'https://www.googleapis.com/auth/userinfo.email', 
@@ -68,6 +75,14 @@ def get_flow():
         redirect_uri=REDIRECT_URI
     )
 
+# Dependency to get database session
+def get_database_session():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
 @app.get("/health")
 async def health():
     return {"status": "healthy", "service": "auth"}
@@ -91,150 +106,140 @@ async def auth():
         "authorization_url": authorization_url,
         "session_id": session_id
     }
-
 @app.get("/callback")
-async def callback(request: Request):
-    """Handle OAuth callback"""
-    flow = get_flow()
-    
+async def callback(code: str, state: str = None, db: Session = Depends(get_database_session)):
+    """Handle OAuth callback and store credentials"""
     try:
-        flow.fetch_token(authorization_response=str(request.url))
-        credentials = flow.credentials
+        # Validate state parameter if needed
+        if state and state in pending_auth:
+            session_id = pending_auth.pop(state)
+            logger.info(f"Processing callback for session {session_id}")
         
-        # Extract state (session_id) from the callback
-        state = request.query_params.get('state')
-        session_id = pending_auth.get(state)
-        
-        if not session_id:
-            raise HTTPException(status_code=400, detail="Invalid or expired auth session")
-        
-        # Get user info from Google
-        service = build('oauth2', 'v2', credentials=credentials)
-        user_info = service.userinfo().get().execute()
-        google_user_id = user_info['id']
-        user_email = user_info.get('email', 'unknown')
-        user_name = user_info.get('name', '')
-        
-        # Check if user exists (returning user)
-        existing_user = credential_manager.get_user_by_google_id(google_user_id)
-        is_new_user = existing_user is None
-        
-        # Save user and credentials to database
-        user_id = credential_manager.save_user_and_credentials(
-            google_user_id, user_email, user_name, credentials
+        flow = Flow.from_client_secrets_file(
+            CLIENT_SECRETS_FILE,
+            scopes=SCOPES,
+            redirect_uri=REDIRECT_URI
         )
         
-        # Create session token
-        session_token = create_session_token(user_id)
+        # Set the state if provided
+        if state:
+            flow.state = state
         
-        # Clean up pending auth
-        pending_auth.pop(state, None)
+        # Exchange authorization code for credentials
+        flow.fetch_token(code=code)
+        credentials = flow.credentials
         
-        # Notify other services about user login
-        if is_new_user:
-            # Register with email sync service or other services
-            pass
+        # Log credential details for debugging
+        logger.info(f"Received credentials - has_refresh_token: {bool(credentials.refresh_token)}")
+        logger.info(f"Token expires at: {credentials.expiry}")
         
-        # Return HTML page that communicates with parent window
-        html_response = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Authentication Success</title>
-            <style>
-                body {{
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                    background: linear-gradient(135deg, #0f0f0f 0%, #1a1a1a 100%);
-                    color: #e0e0e0;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    min-height: 100vh;
-                    margin: 0;
-                    text-align: center;
-                }}
-                .success-message {{
-                    background: rgba(39, 174, 96, 0.2);
-                    border: 1px solid rgba(39, 174, 96, 0.3);
-                    color: #2ecc71;
-                    padding: 24px;
-                    border-radius: 8px;
-                    max-width: 400px;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="success-message">
-                <h2>✅ Authentication Successful!</h2>
-                <p>You can now close this window.</p>
-                <p>Email: {user_email}</p>
-            </div>
-            <script>
-                // Send authentication data to parent window
-                if (window.opener) {{
-                    window.opener.postMessage({{
-                        type: 'GMAIL_AUTH_SUCCESS',
-                        token: '{session_token}',
-                        user_email: '{user_email}',
-                        user_id: '{user_id}'
-                    }}, '*');
-                    
-                    // Close this window after a short delay
-                    setTimeout(() => {{
-                        window.close();
-                    }}, 2000);
-                }}
-            </script>
-        </body>
-        </html>
-        """
+        # Validate that we have all required credential components
+        if not credentials.refresh_token:
+            logger.error("No refresh token received - user may need to re-authorize with consent")
+            raise HTTPException(
+                status_code=400, 
+                detail="Authorization incomplete. Please ensure you grant full permissions and try again."
+            )
         
-        return HTMLResponse(content=html_response)
+        # Get user info from Google
+        userinfo_response = requests.get(
+            'https://www.googleapis.com/oauth2/v2/userinfo',
+            headers={'Authorization': f'Bearer {credentials.token}'},
+            timeout=10
+        )
         
+        if userinfo_response.status_code != 200:
+            logger.error(f"Failed to get user info: {userinfo_response.status_code}")
+            raise HTTPException(status_code=400, detail="Failed to get user info from Google")
+        
+        user_info = userinfo_response.json()
+        email = user_info.get("email")
+        name = user_info.get("name", "")
+        
+        if not email:
+            logger.error("No email in user info response")
+            raise HTTPException(status_code=400, detail="Failed to get user email")
+        
+        # Check if user exists, create if not
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            user = User(email=email, name=name, is_active=True)
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            logger.info(f"Created new user: {email}")
+        else:
+            # Update user info and ensure active
+            user.name = name
+            user.is_active = True
+            db.commit()
+            logger.info(f"Updated existing user: {email}")
+        
+        # Store credentials with validation
+        try:
+            credential_manager.store_credentials(str(user.id), credentials)
+            logger.info(f"Stored credentials for user {user.id}")
+        except Exception as e:
+            logger.error(f"Failed to store credentials: {e}")
+            raise HTTPException(status_code=500, detail="Failed to store credentials")
+        
+        # Verify credentials were stored properly
+        stored_creds = credential_manager.load_credentials(str(user.id))
+        if not stored_creds:
+            logger.error(f"Could not load stored credentials for user {user.id}")
+            raise HTTPException(status_code=500, detail="Failed to verify stored credentials")
+        
+        if not stored_creds.refresh_token:
+            logger.error(f"Stored credentials missing refresh token for user {user.id}")
+            raise HTTPException(status_code=500, detail="Stored credentials incomplete")
+        
+        # Generate session token
+        session_token = create_session_token(str(user.id))
+        
+        logger.info(f"Successfully authenticated user {email} with refresh token")
+        
+        return {
+            "message": "Authentication successful",
+            "user_id": str(user.id),
+            "email": email,
+            "name": name,
+            "session_token": session_token,
+            "has_refresh_token": bool(stored_creds.refresh_token)
+        }
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        error_html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Authentication Failed</title>
-        </head>
-        <body>
-            <div class="error-message">
-                <h2>❌ Authentication Failed</h2>
-                <p>{str(e)}</p>
-                <p>Please close this window and try again.</p>
-            </div>
-        </body>
-        </html>
-        """
-        
-        return HTMLResponse(content=error_html)
+        logger.error(f"Callback error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Authentication failed: {str(e)}")
 
 @app.get("/status")
-async def status(x_user_id: str = Header(None)):
+async def status(x_user_id: str = Header(None), db: Session = Depends(get_database_session)):
     """Check authentication status for current user"""
     if not x_user_id:
         raise HTTPException(status_code=401, detail="User ID required")
     
-    creds = credential_manager.load_credentials(x_user_id)
-    
-    with get_db() as db:
+    try:
+        creds = credential_manager.load_credentials(x_user_id)
         user = db.query(User).filter(User.id == x_user_id).first()
-    
-    if creds and creds.valid and user:
-        return {
-            "authenticated": True, 
-            "message": "Ready to access Gmail", 
-            "user_id": x_user_id,
-            "email": user.email,
-            "name": user.name
-        }
-    else:
-        return {
-            "authenticated": False, 
-            "message": "Not authenticated", 
-            "user_id": x_user_id
-        }
+        
+        if creds and creds.valid and user:
+            return {
+                "authenticated": True, 
+                "message": "Ready to access Gmail", 
+                "user_id": x_user_id,
+                "email": user.email,
+                "name": user.name
+            }
+        else:
+            return {
+                "authenticated": False, 
+                "message": "Not authenticated", 
+                "user_id": x_user_id
+            }
+    except Exception as e:
+        logger.error(f"Status check error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/logout")
 async def logout(x_user_id: str = Header(None)):
@@ -242,8 +247,12 @@ async def logout(x_user_id: str = Header(None)):
     if not x_user_id:
         raise HTTPException(status_code=401, detail="User ID required")
     
-    credential_manager.deactivate_user(x_user_id)
-    return {"success": True, "message": "Logged out successfully"}
+    try:
+        credential_manager.deactivate_user(x_user_id)
+        return {"success": True, "message": "Logged out successfully"}
+    except Exception as e:
+        logger.error(f"Logout error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.get("/credentials")
 async def get_credentials(x_user_id: str = Header(None)):
@@ -251,20 +260,122 @@ async def get_credentials(x_user_id: str = Header(None)):
     if not x_user_id:
         raise HTTPException(status_code=401, detail="User ID required")
     
-    creds = credential_manager.load_credentials(x_user_id)
+    try:
+        creds = credential_manager.load_credentials(x_user_id)
+        
+        if not creds or not creds.valid:
+            raise HTTPException(status_code=401, detail="Invalid or expired credentials")
+        
+        return {
+            "token": creds.token,
+            "refresh_token": creds.refresh_token,
+            "token_uri": creds.token_uri,
+            "client_id": creds.client_id,
+            "client_secret": creds.client_secret,
+            "scopes": creds.scopes
+        }
+    except Exception as e:
+        logger.error(f"Credentials error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/verify")
+async def verify_token(request: Request, db: Session = Depends(get_database_session)):
+    """Verify token and return user info"""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization header")
     
-    if not creds or not creds.valid:
-        raise HTTPException(status_code=401, detail="Invalid or expired credentials")
+    token = auth_header.split("Bearer ")[1]
     
-    return {
-        "token": creds.token,
-        "refresh_token": creds.refresh_token,
-        "token_uri": creds.token_uri,
-        "client_id": creds.client_id,
-        "client_secret": creds.client_secret,
-        "scopes": creds.scopes
-    }
+    try:
+        # First try to verify as JWT token
+        user_id = verify_session_token(token)
+        if user_id:
+            user = db.query(User).filter(User.id == user_id).first()
+            if user and user.is_active:  # Add active check
+                return {
+                    "authenticated": True,
+                    "user_id": user.id,
+                    "email": user.email,
+                    "name": user.name
+                }
+        
+        # If JWT verification fails, try Google OAuth token verification
+        userinfo_response = requests.get(
+            'https://www.googleapis.com/oauth2/v2/userinfo',
+            headers={'Authorization': f'Bearer {token}'},
+            timeout=10  # Add timeout
+        )
+        
+        if userinfo_response.status_code == 200:
+            user_info = userinfo_response.json()
+            email = user_info.get("email")
+            
+            if email:
+                user = db.query(User).filter(User.email == email, User.is_active == True).first()
+                if user:
+                    return {
+                        "authenticated": True,
+                        "user_id": user.id,
+                        "email": user.email,
+                        "name": user.name
+                    }
+        
+        raise HTTPException(status_code=401, detail="Invalid token")
+        
+    except requests.RequestException as e:
+        logger.error(f"Google API request failed: {e}")
+        raise HTTPException(status_code=401, detail="Token verification failed")
+    except Exception as e:
+        logger.error(f"Token verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Token verification failed")
+@app.get("/authorize")
+async def authorize():
+    """Redirect user to Google authorization page"""
+    try:
+        flow = Flow.from_client_secrets_file(
+            CLIENT_SECRETS_FILE,
+            scopes=SCOPES,
+            redirect_uri=REDIRECT_URI
+        )
+        
+        # Add offline access to get refresh token
+        authorization_url, state = flow.authorization_url(
+            access_type='offline',  # This is crucial for getting refresh token
+            prompt='consent',       # Force consent screen to ensure refresh token
+            include_granted_scopes='true'
+        )
+        
+        logger.info(f"Generated authorization URL: {authorization_url}")
+        return {"authorization_url": authorization_url, "state": state}
+    except Exception as e:
+        logger.error(f"Error generating authorization URL: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate authorization URL")
+
+@app.post("/reauth")
+async def force_reauth(x_user_id: str = Header(...), db: Session = Depends(get_database_session)):
+    """Force re-authentication for a user (clears stored credentials)"""
+    try:
+        user = db.query(User).filter(User.id == x_user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Clear stored credentials
+        user.encrypted_credentials = None
+        db.commit()
+        
+        logger.info(f"Cleared credentials for user {x_user_id} - re-authentication required")
+        
+        return {
+            "message": "Credentials cleared. Please re-authenticate.",
+            "requires_auth": True,
+            "auth_url": "/authorize"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error clearing credentials for user {x_user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to clear credentials")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=5000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)  # Fixed: Use port 8001

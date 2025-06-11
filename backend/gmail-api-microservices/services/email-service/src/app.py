@@ -9,6 +9,12 @@ from .handlers.crud import EmailManager
 from .handlers.search import EmailSearchManager
 from pydantic import BaseModel, Field
 from datetime import datetime
+import httpx
+import os
+import logging  # Add this import
+
+# Add logger
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Email Service",
@@ -43,17 +49,36 @@ async def health():
 async def get_emails(
     limit: int = Query(default=20, le=100),
     offset: int = Query(default=0, ge=0),
+    category: str = Query(None),
     x_user_id: str = Header(None)
 ):
-    """Get emails from database"""
+    """Get emails with enhanced filtering"""
     if not x_user_id:
         raise HTTPException(status_code=401, detail="User ID required")
     
-    email_list = email_manager.get_user_emails(x_user_id, limit, offset)
+    emails = email_manager.get_user_emails(x_user_id, limit, offset, category)
+    
+    email_list = []
+    for email in emails:
+        email_list.append({
+            'id': email['id'],
+            'thread_id': email.get('thread_id'),
+            'subject': email['subject'],
+            'sender': email['sender'],
+            'recipient': email['recipient'],
+            'date': email['date'],
+            'snippet': email['snippet'],
+            'is_read': email['is_read'],
+            'is_starred': email['is_starred'],
+            'is_important': email.get('is_important', False),
+            'category': email.get('category'),
+            'urgency': email.get('urgency', 0),
+            'has_tls': email.get('has_tls', False),
+            'stored_at': email['stored_at']
+        })
     
     return {
         "emails": email_list,
-        "user_id": x_user_id,
         "count": len(email_list),
         "offset": offset,
         "limit": limit
@@ -108,6 +133,106 @@ async def search_emails(
     return {
         "emails": email_list,
         "query": q,
+        "count": len(email_list)
+    }
+
+@app.get("/emails/search/advanced")
+async def advanced_search_emails(
+    q: str = Query(None, description="Search query"),
+    category: str = Query(None, description="Email category"),
+    urgency_min: int = Query(None, description="Minimum urgency level (0-10)"),
+    is_important: bool = Query(None, description="Filter by importance"),
+    limit: int = Query(default=20, le=50),
+    x_user_id: str = Header(None)
+):
+    """Advanced email search with filters"""
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="User ID required")
+    
+    emails = search_manager.search_emails(
+        x_user_id, q or "", limit, category, urgency_min, is_important
+    )
+    
+    email_list = []
+    for email in emails:
+        email_list.append({
+            'id': email.gmail_message_id,
+            'thread_id': email.thread_id,
+            'subject': email.subject,
+            'sender': email.sender,
+            'recipient': email.recipient,
+            'date': email.date_sent.isoformat() if email.date_sent else None,
+            'snippet': email.snippet,
+            'is_read': email.is_read,
+            'is_starred': email.is_starred,
+            'is_important': email.is_important,
+            'category': email.category,
+            'urgency': email.urgency,
+            'has_attachments': len(email.attachments or []) > 0
+        })
+    
+    return {
+        "emails": email_list,
+        "filters": {
+            "query": q,
+            "category": category,
+            "urgency_min": urgency_min,
+            "is_important": is_important
+        },
+        "count": len(email_list)
+    }
+
+@app.get("/emails/thread/{thread_id}")
+async def get_thread_emails(thread_id: str, x_user_id: str = Header(None)):
+    """Get all emails in a thread"""
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="User ID required")
+    
+    emails = search_manager.search_by_thread(x_user_id, thread_id)
+    
+    email_list = []
+    for email in emails:
+        email_list.append({
+            'id': email.gmail_message_id,
+            'subject': email.subject,
+            'sender': email.sender,
+            'date': email.date_sent.isoformat() if email.date_sent else None,
+            'body_html': email.processed_html or email.body_html,
+            'body_text': email.body_text,
+            'is_read': email.is_read,
+            'attachments': email.attachments or []
+        })
+    
+    return {
+        "thread_id": thread_id,
+        "emails": email_list,
+        "count": len(email_list)
+    }
+
+@app.get("/emails/attachments")
+async def get_emails_with_attachments(
+    limit: int = Query(default=20, le=50),
+    x_user_id: str = Header(None)
+):
+    """Get emails that have attachments"""
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="User ID required")
+    
+    emails = search_manager.get_emails_with_attachments(x_user_id, limit)
+    
+    email_list = []
+    for email in emails:
+        email_list.append({
+            'id': email.gmail_message_id,
+            'subject': email.subject,
+            'sender': email.sender,
+            'date': email.date_sent.isoformat() if email.date_sent else None,
+            'attachments': email.attachments,
+            'attachment_count': len(email.attachments or [])
+        })
+    
+    return {
+        "emails": email_list,
         "count": len(email_list)
     }
 
@@ -259,6 +384,30 @@ async def save_bulk_emails(
         "saved_count": saved_count,
         "total_received": len(emails)
     }
+
+@app.post("/emails/sync")
+async def sync_emails(x_user_id: str = Header(...)):
+    """Sync emails from Gmail via gmail-service"""
+    try:
+        # Forward sync request to gmail-service
+        gmail_service_url = os.getenv('GMAIL_SERVICE_URL', 'http://localhost:5001')
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{gmail_service_url}/sync",
+                headers={"X-User-ID": x_user_id},
+                timeout=60.0  # Longer timeout for sync
+            )
+            
+            if response.status_code == 200:
+                return {"status": "sync_completed", "message": "Emails synced successfully"}
+            else:
+                raise HTTPException(status_code=response.status_code, detail="Sync failed")
+                
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=503, detail=f"Gmail service unavailable: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sync error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
