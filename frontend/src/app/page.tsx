@@ -4,13 +4,12 @@ import { useState, useEffect } from 'react';
 import LandingPage from '../components/LandingPage';
 import DashboardPage from '../components/DashboardPage';
 
-const API_BASE = 'http://localhost:8001'; // Updated to auth service port
+const API_BASE = 'http://localhost:8002'; // Updated to your new FastAPI server
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
-  const [authWindow, setAuthWindow] = useState<Window | null>(null);
   const [initialSyncComplete, setInitialSyncComplete] = useState(false);
   const [user, setUser] = useState<any>(null);
 
@@ -18,15 +17,15 @@ export default function App() {
   const triggerInitialSync = async () => {
     try {
       console.log('Triggering initial email sync...');
-      const token = localStorage.getItem('supabase_token');
+      const token = localStorage.getItem('access_token');
       
       if (!token) {
         console.error('No token available for sync');
         return;
       }
       
-      const response = await fetch(`http://localhost:8002/emails`, {
-        method: 'GET',
+      const response = await fetch(`${API_BASE}/emails/sync`, {
+        method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -34,7 +33,7 @@ export default function App() {
       });
 
       if (response.ok) {
-        console.log('Initial sync completed successfully');
+        console.log('Initial sync started successfully');
         setInitialSyncComplete(true);
       } else {
         console.error('Initial sync failed:', response.status);
@@ -47,24 +46,23 @@ export default function App() {
   // Check authentication status on mount
   useEffect(() => {
     const checkAuth = async () => {
-      const token = localStorage.getItem('supabase_token');
-      const refreshToken = localStorage.getItem('supabase_refresh_token');
-      const userData = localStorage.getItem('user_data');
+      const token = localStorage.getItem('access_token');
+      const refreshToken = localStorage.getItem('refresh_token');
       
-      if (token && userData) {
+      if (token) {
         try {
-          // Verify token with auth service
-          const response = await fetch(`${API_BASE}/verify`, {
+          // Verify token with new auth system
+          const response = await fetch(`${API_BASE}/auth/me`, {
             headers: {
               'Authorization': `Bearer ${token}`
             }
           });
           
           if (response.ok) {
-            const data = await response.json();
-            setUser(data.user);
+            const userData = await response.json();
+            setUser(userData);
             setIsAuthenticated(true);
-            console.log('User authenticated:', data.user);
+            console.log('User authenticated:', userData);
             
             // Check if initial sync is needed
             setTimeout(() => {
@@ -75,16 +73,11 @@ export default function App() {
             await refreshAuthToken(refreshToken);
           } else {
             // Clear invalid tokens
-            localStorage.removeItem('supabase_token');
-            localStorage.removeItem('supabase_refresh_token');
-            localStorage.removeItem('user_data');
+            clearAuthTokens();
           }
         } catch (error) {
           console.error('Auth check failed:', error);
-          // Clear tokens on error
-          localStorage.removeItem('supabase_token');
-          localStorage.removeItem('supabase_refresh_token');
-          localStorage.removeItem('user_data');
+          clearAuthTokens();
         }
       }
       
@@ -94,10 +87,19 @@ export default function App() {
     checkAuth();
   }, []);
 
+  // Clear authentication tokens
+  const clearAuthTokens = () => {
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    localStorage.removeItem('user_data');
+    setIsAuthenticated(false);
+    setUser(null);
+  };
+
   // Refresh token function
   const refreshAuthToken = async (refreshToken: string) => {
     try {
-      const response = await fetch(`${API_BASE}/refresh`, {
+      const response = await fetch(`${API_BASE}/auth/refresh`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -107,115 +109,20 @@ export default function App() {
 
       if (response.ok) {
         const data = await response.json();
-        localStorage.setItem('supabase_token', data.access_token);
-        localStorage.setItem('supabase_refresh_token', data.refresh_token);
+        localStorage.setItem('access_token', data.access_token);
+        localStorage.setItem('refresh_token', data.refresh_token);
         localStorage.setItem('user_data', JSON.stringify(data.user));
         setUser(data.user);
         setIsAuthenticated(true);
         console.log('Token refreshed successfully');
       } else {
-        // Clear invalid tokens
-        localStorage.removeItem('supabase_token');
-        localStorage.removeItem('supabase_refresh_token');
-        localStorage.removeItem('user_data');
+        clearAuthTokens();
       }
     } catch (error) {
       console.error('Token refresh failed:', error);
+      clearAuthTokens();
     }
   };
-
-  // Handle authentication
-  const handleAuthentication = async () => {
-    try {
-      setIsLoading(true);
-      
-      // Check if user already has Supabase account, otherwise redirect to signup
-      const signupUrl = `${window.location.origin}/signup`;
-      
-      // For now, let's get Google OAuth URL for Gmail access
-      const response = await fetch(`${API_BASE}/auth/google`, {
-        headers: {
-          'Authorization': `Bearer ${localStorage.getItem('supabase_token')}`
-        }
-      });
-      
-      if (!response.ok) {
-        // User needs to sign up/login first
-        window.location.href = '/auth';
-        return;
-      }
-      
-      const data = await response.json();
-      
-      // Open popup for Google OAuth
-      const popup = window.open(
-        data.authorization_url,
-        'gmail_auth',
-        'width=500,height=600,scrollbars=yes,resizable=yes,location=yes'
-      );
-    
-      if (!popup) {
-        throw new Error('Popup blocked. Please allow popups for this site.');
-      }
-    
-      setAuthWindow(popup);
-    
-      const checkClosed = setInterval(() => {
-        if (popup.closed) {
-          clearInterval(checkClosed);
-          setAuthWindow(null);
-          console.log('Authentication popup was closed');
-        }
-      }, 1000);
-
-    } catch (error) {
-      console.error('Authentication error:', error);
-      alert(`Authentication failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Listen for auth messages from popup
-  useEffect(() => {
-    const handleAuthMessage = (event: MessageEvent) => {
-      // Accept messages from your domain and auth service
-      if (event.origin !== window.location.origin && 
-          event.origin !== 'http://localhost:8001') {
-        return;
-      }
-      
-      if (event.data.type === 'gmail_auth_success') {
-        console.log('Gmail authentication successful!');
-        
-        if (authWindow && !authWindow.closed) {
-          authWindow.close();
-          setAuthWindow(null);
-        }
-        
-        // Trigger initial sync
-        setTimeout(() => {
-          triggerInitialSync();
-        }, 1000);
-        
-      } else if (event.data.type === 'gmail_auth_error') {
-        console.error('Gmail authentication failed:', event.data.error);
-        
-        if (authWindow && !authWindow.closed) {
-          authWindow.close();
-          setAuthWindow(null);
-        }
-        
-        alert(`Gmail authentication failed: ${event.data.error}`);
-      }
-    };
-
-    window.addEventListener('message', handleAuthMessage);
-    
-    return () => {
-      window.removeEventListener('message', handleAuthMessage);
-    };
-  }, [authWindow]);
 
   // Show loading spinner while checking auth
   if (isLoading) {
@@ -231,7 +138,11 @@ export default function App() {
 
   // Show auth page if not authenticated
   if (!isAuthenticated) {
-    return <AuthPage darkMode={darkMode} setDarkMode={setDarkMode} />;
+    return <AuthPage darkMode={darkMode} setDarkMode={setDarkMode} onAuthSuccess={(userData) => {
+      setUser(userData);
+      setIsAuthenticated(true);
+      triggerInitialSync();
+    }} />;
   }
 
   // Show dashboard if authenticated
@@ -245,20 +156,26 @@ export default function App() {
   );
 }
 
-// New Auth Page Component
-function AuthPage({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (dark: boolean) => void }) {
+// Updated Auth Page Component
+function AuthPage({ darkMode, setDarkMode, onAuthSuccess }: { 
+  darkMode: boolean; 
+  setDarkMode: (dark: boolean) => void;
+  onAuthSuccess: (userData: any) => void;
+}) {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
+    setError('');
 
     try {
-      const endpoint = isLogin ? '/signin' : '/signup';
+      const endpoint = isLogin ? '/auth/login' : '/auth/register';
       const body = isLogin 
         ? { email, password }
         : { email, password, name };
@@ -271,35 +188,22 @@ function AuthPage({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
         body: JSON.stringify(body)
       });
 
+      const data = await response.json();
+
       if (response.ok) {
-        const data = await response.json();
+        // Store tokens and user data
+        localStorage.setItem('access_token', data.access_token);
+        localStorage.setItem('refresh_token', data.refresh_token);
+        localStorage.setItem('user_data', JSON.stringify(data.user));
         
-        // Check if email confirmation is required
-        if (data.email_confirmation_required) {
-          alert('Registration successful! Please check your email to confirm your account before signing in.');
-          setIsLogin(true); // Switch to login mode
-          setEmail(''); // Clear form
-          setPassword('');
-          setName('');
-          return;
-        }
-        
-        // Store tokens and user data (for successful login/signup without confirmation)
-        if (data.access_token) {
-          localStorage.setItem('supabase_token', data.access_token);
-          localStorage.setItem('supabase_refresh_token', data.refresh_token);
-          localStorage.setItem('user_data', JSON.stringify(data.user));
-          
-          // Reload page to trigger auth check
-          window.location.reload();
-        }
+        // Call success callback
+        onAuthSuccess(data.user);
       } else {
-        const error = await response.json();
-        alert(error.detail || 'Authentication failed');
+        setError(data.detail || 'Authentication failed');
       }
     } catch (error) {
       console.error('Auth error:', error);
-      alert('Authentication failed. Please try again.');
+      setError('Authentication failed. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -309,11 +213,19 @@ function AuthPage({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
     <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-gray-900' : 'bg-gray-50'}`}>
       <div className={`max-w-md w-full mx-4 p-8 rounded-lg shadow-lg ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold mb-2">Welcome to Velocitas</h1>
+          <h1 className={`text-2xl font-bold mb-2 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+            Welcome to Velocitas
+          </h1>
           <p className={`${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
             {isLogin ? 'Sign in to your account' : 'Create your account'}
           </p>
         </div>
+
+        {error && (
+          <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded-lg">
+            {error}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit}>
           {!isLogin && (
@@ -360,6 +272,7 @@ function AuthPage({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
                 darkMode ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-300'
               }`}
               required
+              minLength={6}
             />
           </div>
 
@@ -374,7 +287,10 @@ function AuthPage({ darkMode, setDarkMode }: { darkMode: boolean; setDarkMode: (
 
         <div className="mt-6 text-center">
           <button
-            onClick={() => setIsLogin(!isLogin)}
+            onClick={() => {
+              setIsLogin(!isLogin);
+              setError('');
+            }}
             className={`text-yellow-500 hover:text-yellow-600 font-medium`}
           >
             {isLogin ? "Don't have an account? Sign up" : "Already have an account? Sign in"}

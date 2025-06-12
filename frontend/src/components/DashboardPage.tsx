@@ -40,8 +40,8 @@ interface Email {
   recipient: string;
   date: string;
   snippet: string;
-  body_text?: string;
-  body_html?: string;
+  plain_body?: string;
+  html_body?: string;
   is_read: boolean;
   is_starred: boolean;
   category?: string;
@@ -130,7 +130,7 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
 
   // Helper function to get auth headers
   const getAuthHeaders = () => {
-    const token = localStorage.getItem('supabase_token');
+    const token = localStorage.getItem('access_token'); // Updated token key
     return {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json'
@@ -148,10 +148,28 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
       });
 
       if (!response.ok) {
-        if (response.status === 403) {
-          // Gmail access not granted
-          setError('Gmail access required. Please connect your Google account.');
-          checkGmailAccess();
+        if (response.status === 401) {
+          // Token expired, try to refresh
+          const refreshToken = localStorage.getItem('refresh_token');
+          if (refreshToken) {
+            await refreshAuthToken(refreshToken);
+            // Retry the request
+            const retryResponse = await fetch(`${API_BASE}/emails?max_results=50`, {
+              headers: getAuthHeaders()
+            });
+            if (retryResponse.ok) {
+              const data = await retryResponse.json();
+              const emailList = data.emails || [];
+              setEmails(emailList);
+              setFilteredEmails(emailList);
+              if (emailList.length > 0 && !selectedEmail) {
+                setSelectedEmail(emailList[0]);
+              }
+              return;
+            }
+          }
+          // If refresh fails, logout user
+          handleLogout();
           return;
         }
         throw new Error(`Failed to fetch emails: ${response.statusText}`);
@@ -383,189 +401,12 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
     }
   }, [user]);
 
-  // Inject email-specific CSS styles for Gmail-like rendering
-  useEffect(() => {
-    const emailStyles = `
-      <style id="email-content-styles">
-        .email-content.gmail-style {
-          font-family: Roboto, RobotoDraft, Helvetica, Arial, sans-serif !important;
-          font-size: 14px !important;
-          line-height: 1.6 !important;
-          color: ${darkMode ? '#e4e6ea' : '#202124'} !important;
-          background: transparent !important;
-          word-wrap: break-word !important;
-          overflow-wrap: break-word !important;
-        }
-        
-        .gmail-email-wrapper * {
-          max-width: 100% !important;
-          word-wrap: break-word !important;
-          overflow-wrap: break-word !important;
-        }
-        
-        .gmail-email-wrapper a {
-          color: ${darkMode ? '#8ab4f8' : '#1a73e8'} !important;
-          text-decoration: none !important;
-          word-break: break-word !important;
-        }
-        
-        .gmail-email-wrapper a:hover {
-          text-decoration: underline !important;
-          color: ${darkMode ? '#aecbfa' : '#174ea6'} !important;
-        }
-        
-        .gmail-email-wrapper p {
-          margin: 0 0 12px 0 !important;
-          line-height: 1.6 !important;
-          font-size: 14px !important;
-        }
-        
-        .gmail-email-wrapper div {
-          line-height: 1.6 !important;
-          font-size: 14px !important;
-        }
-        
-        .gmail-email-wrapper table {
-          border-collapse: collapse !important;
-          max-width: 100% !important;
-          table-layout: fixed !important;
-          font-size: 14px !important;
-        }
-        
-        .gmail-email-wrapper td, .gmail-email-wrapper th {
-          padding: 8px !important;
-          vertical-align: top !important;
-          word-wrap: break-word !important;
-          font-size: 14px !important;
-          border: ${darkMode ? '1px solid #3c4043' : '1px solid #dadce0'} !important;
-        }
-        
-        .gmail-email-wrapper img {
-          max-width: 100% !important;
-          height: auto !important;
-          display: block !important;
-          margin: 8px 0 !important;
-        }
-        
-        .gmail-email-wrapper blockquote {
-          border-left: 4px solid ${darkMode ? '#5f6368' : '#dadce0'} !important;
-          margin: 16px 0 !important;
-          padding-left: 16px !important;
-          color: ${darkMode ? '#9aa0a6' : '#5f6368'} !important;
-          font-style: italic !important;
-        }
-        
-        .gmail-email-wrapper h1, .gmail-email-wrapper h2, .gmail-email-wrapper h3, 
-        .gmail-email-wrapper h4, .gmail-email-wrapper h5, .gmail-email-wrapper h6 {
-          margin: 16px 0 8px 0 !important;
-          line-height: 1.3 !important;
-          color: ${darkMode ? '#e4e6ea' : '#202124'} !important;
-          font-weight: 500 !important;
-        }
-        
-        .gmail-email-wrapper ul, .gmail-email-wrapper ol {
-          margin: 8px 0 !important;
-          padding-left: 20px !important;
-        }
-        
-        .gmail-email-wrapper li {
-          margin: 4px 0 !important;
-          line-height: 1.6 !important;
-        }
-        
-        .gmail-email-wrapper pre {
-          font-family: 'Roboto Mono', monospace !important;
-          background: ${darkMode ? '#2d3134' : '#f8f9fa'} !important;
-          padding: 12px !important;
-          border-radius: 4px !important;
-          overflow-x: auto !important;
-          white-space: pre-wrap !important;
-          word-wrap: break-word !important;
-          font-size: 13px !important;
-        }
-        
-        .gmail-email-wrapper code {
-          font-family: 'Roboto Mono', monospace !important;
-          background: ${darkMode ? '#2d3134' : '#f1f3f4'} !important;
-          padding: 2px 4px !important;
-          border-radius: 3px !important;
-          font-size: 13px !important;
-        }
-        
-        /* Gmail signature styling */
-        .gmail-email-wrapper .gmail_signature,
-        .gmail-email-wrapper div[data-smartmail="gmail_signature"] {
-          margin-top: 16px !important;
-          padding-top: 16px !important;
-          border-top: 1px solid ${darkMode ? '#3c4043' : '#dadce0'} !important;
-          color: ${darkMode ? '#9aa0a6' : '#5f6368'} !important;
-          font-size: 13px !important;
-        }
-        
-        /* Gmail quote styling */
-        .gmail-email-wrapper .gmail_quote {
-          margin: 16px 0 !important;
-          padding-left: 16px !important;
-          border-left: 4px solid ${darkMode ? '#5f6368' : '#dadce0'} !important;
-          color: ${darkMode ? '#9aa0a6' : '#5f6368'} !important;
-        }
-        
-        /* Remove unwanted styles that might interfere */
-        .gmail-email-wrapper * {
-          background: transparent !important;
-          box-shadow: none !important;
-          text-shadow: none !important;
-        }
-        
-        /* Preserve table backgrounds for better readability */
-        .gmail-email-wrapper table,
-        .gmail-email-wrapper td,
-        .gmail-email-wrapper th {
-          background: ${darkMode ? '#1f1f1f' : '#ffffff'} !important;
-        }
-        
-        /* Mobile responsiveness */
-        @media screen and (max-width: 600px) {
-          .gmail-email-wrapper {
-            font-size: 16px !important;
-          }
-          
-          .gmail-email-wrapper table {
-            width: 100% !important;
-            display: block !important;
-            overflow-x: auto !important;
-          }
-          
-          .gmail-email-wrapper img {
-            max-width: 100% !important;
-            width: auto !important;
-          }
-        }
-      </style>
-    `;
-
-    // Remove existing styles and add new ones
-    const existingStyles = document.getElementById('email-content-styles');
-    if (existingStyles) {
-      existingStyles.remove();
-    }
-    
-    document.head.insertAdjacentHTML('beforeend', emailStyles);
-
-    // Cleanup function
-    return () => {
-      const styles = document.getElementById('email-content-styles');
-      if (styles) {
-        styles.remove();
-      }
-    };
-  }, [darkMode]);
-
   // Update the formatEmailBody function to better handle HTML content
   const formatEmailBody = (email: Email) => {
-    if (email.body_html) {
+    // Use html_body and plain_body which are the actual field names from backend
+    if (email.html_body) {
       // Enhanced HTML sanitization and styling for Gmail-like appearance
-      let htmlContent = email.body_html;
+      let htmlContent = email.html_body;
       
       // Remove dangerous scripts and elements
       htmlContent = htmlContent.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
@@ -582,57 +423,29 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
       // Make sure all links open in new tab for security
       htmlContent = htmlContent.replace(/<a\s+/gi, '<a target="_blank" rel="noopener noreferrer" ');
       
-      // Wrap in Gmail-like container with proper styling
-      const gmailWrapper = `
-        <div class="gmail-email-wrapper" style="
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
-          font-size: 14px;
-          line-height: 1.6;
-          color: ${darkMode ? '#e4e6ea' : '#202124'};
-          background-color: transparent;
-          word-wrap: break-word;
-          overflow-wrap: break-word;
-          max-width: 100%;
-        ">
-          ${htmlContent}
-        </div>
-      `;
-      
       return (
-        <div 
-          className="email-content gmail-style"
-          dangerouslySetInnerHTML={{ __html: gmailWrapper }}
-          style={{
-            fontFamily: 'inherit',
-            lineHeight: '1.6',
-            color: darkMode ? '#e4e6ea' : '#202124',
-            maxWidth: '100%',
-            wordWrap: 'break-word',
-            fontSize: '14px'
-          }}
-        />
+        <div className="email-body-container">
+          <div 
+            className="email-body"
+            dangerouslySetInnerHTML={{ __html: htmlContent }}
+          />
+        </div>
       );
-    } else if (email.body_text) {
+    } else if (email.plain_body) {
       // Convert plain text URLs to clickable links and preserve formatting
-      const textWithLinks = email.body_text
+      const textWithLinks = email.plain_body
         .replace(/(https?:\/\/[^\s]+)/g, 
-          `<a href="$1" target="_blank" rel="noopener noreferrer" style="color: ${darkMode ? '#8ab4f8' : '#1a73e8'}; text-decoration: none;">$1</a>`
+          `<a href="$1" target="_blank" rel="noopener noreferrer" class="email-link">$1</a>`
         )
         .replace(/\n/g, '<br>'); // Preserve line breaks    
       
       return (
-        <div 
-          className="gmail-plain-text"
-          style={{
-            fontFamily: 'Roboto, RobotoDraft, Helvetica, Arial, sans-serif',
-            fontSize: '14px',
-            lineHeight: '1.6',
-            color: darkMode ? '#e4e6ea' : '#202124',
-            whiteSpace: 'pre-wrap',
-            wordWrap: 'break-word'
-          }}
-          dangerouslySetInnerHTML={{ __html: textWithLinks }}
-        />
+        <div className="email-body-container">
+          <div 
+            className="email-body plain-text"
+            dangerouslySetInnerHTML={{ __html: textWithLinks }}
+          />
+        </div>
       );
     } else {
       return (
@@ -667,17 +480,23 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
   // Handle logout
   const handleLogout = async () => {
     try {
-      // Call logout endpoint
-      await fetch('http://localhost:8001/signout', {
-        method: 'POST',
-        headers: getAuthHeaders()
-      });
+      // Call logout endpoint with new auth system
+      const refreshToken = localStorage.getItem('refresh_token');
+      if (refreshToken) {
+        await fetch(`${API_BASE}/auth/logout`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ refresh_token: refreshToken })
+        });
+      }
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
-      // Clear local storage
-      localStorage.removeItem('supabase_token');
-      localStorage.removeItem('supabase_refresh_token');
+      // Clear local storage with new token keys
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('refresh_token');
       localStorage.removeItem('user_data');
       
       // Reload page to trigger auth check
@@ -735,13 +554,275 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
     }
   };
 
-  // Initial load
-  useEffect(() => {
-    if (user) {
-      fetchEmails();
-      checkGmailAccess();
+  // Refresh token function
+  const refreshAuthToken = async (refreshToken: string) => {
+    try {
+      const response = await fetch(`${API_BASE}/auth/refresh`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ refresh_token: refreshToken })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        localStorage.setItem('access_token', data.access_token);
+        localStorage.setItem('refresh_token', data.refresh_token);
+        localStorage.setItem('user_data', JSON.stringify(data.user));
+        console.log('Token refreshed successfully');
+        return true;
+      } else {
+        return false;
+      }
+    } catch (error) {
+      console.error('Token refresh failed:', error);
+      return false;
     }
-  }, [user]);
+  };
+
+  // Inject email-specific CSS styles for Gmail-like rendering
+  useEffect(() => {
+    const emailStyles = `
+      <style id="email-content-styles">
+        .email-body-container {
+          font-family: 'Google Sans', Roboto, RobotoDraft, Helvetica, Arial, sans-serif !important;
+          background: ${darkMode ? '#202124' : '#ffffff'} !important;
+          color: ${darkMode ? '#e8eaed' : '#202124'} !important;
+          line-height: 1.6 !important;
+        }
+        
+        .email-body {
+          font-size: 14px !important;
+          line-height: 1.6 !important;
+          color: ${darkMode ? '#e8eaed' : '#202124'} !important;
+          font-family: Arial, sans-serif !important;
+          word-wrap: break-word !important;
+          overflow-wrap: break-word !important;
+          max-width: 100% !important;
+        }
+        
+        .email-body.plain-text {
+          white-space: pre-wrap !important;
+          font-family: 'Google Sans', Roboto, RobotoDraft, Helvetica, Arial, sans-serif !important;
+        }
+        
+        .email-body * {
+          max-width: 100% !important;
+          word-wrap: break-word !important;
+          overflow-wrap: break-word !important;
+        }
+        
+        .email-body p {
+          margin: 0 0 16px 0 !important;
+          line-height: 1.6 !important;
+          font-size: 14px !important;
+        }
+        
+        .email-body div {
+          line-height: 1.6 !important;
+          font-size: 14px !important;
+        }
+        
+        .email-body a,
+        .email-link {
+          color: ${darkMode ? '#8ab4f8' : '#1a73e8'} !important;
+          text-decoration: none !important;
+          word-break: break-word !important;
+        }
+        
+        .email-body a:hover,
+        .email-link:hover {
+          text-decoration: underline !important;
+          color: ${darkMode ? '#aecbfa' : '#174ea6'} !important;
+        }
+        
+        .email-body blockquote {
+          border-left: 4px solid ${darkMode ? '#5f6368' : '#dadce0'} !important;
+          margin: 16px 0 !important;
+          padding-left: 16px !important;
+          color: ${darkMode ? '#9aa0a6' : '#5f6368'} !important;
+          font-style: normal !important;
+        }
+        
+        .email-body table {
+          border-collapse: collapse !important;
+          max-width: 100% !important;
+          table-layout: fixed !important;
+          font-size: 14px !important;
+          background: ${darkMode ? '#202124' : '#ffffff'} !important;
+        }
+        
+        .email-body td, 
+        .email-body th {
+          padding: 8px !important;
+          vertical-align: top !important;
+          word-wrap: break-word !important;
+          font-size: 14px !important;
+          border: 1px solid ${darkMode ? '#5f6368' : '#dadce0'} !important;
+          background: ${darkMode ? '#202124' : '#ffffff'} !important;
+        }
+        
+        .email-body img {
+          max-width: 100% !important;
+          height: auto !important;
+          display: block !important;
+          margin: 8px 0 !important;
+        }
+        
+        .email-body h1, .email-body h2, .email-body h3, 
+        .email-body h4, .email-body h5, .email-body h6 {
+          margin: 16px 0 8px 0 !important;
+          line-height: 1.3 !important;
+          color: ${darkMode ? '#e8eaed' : '#202124'} !important;
+          font-weight: 500 !important;
+        }
+        
+        .email-body ul, .email-body ol {
+          margin: 8px 0 !important;
+          padding-left: 20px !important;
+        }
+        
+        .email-body li {
+          margin: 4px 0 !important;
+          line-height: 1.6 !important;
+        }
+        
+        .email-body pre {
+          font-family: 'Roboto Mono', Consolas, 'Courier New', monospace !important;
+          background: ${darkMode ? '#303134' : '#f8f9fa'} !important;
+          padding: 12px !important;
+          border-radius: 4px !important;
+          overflow-x: auto !important;
+          white-space: pre-wrap !important;
+          word-wrap: break-word !important;
+          font-size: 13px !important;
+          border: 1px solid ${darkMode ? '#5f6368' : '#dadce0'} !important;
+        }
+        
+        .email-body code {
+          font-family: 'Roboto Mono', Consolas, 'Courier New', monospace !important;
+          background: ${darkMode ? '#303134' : '#f1f3f4'} !important;
+          padding: 2px 4px !important;
+          border-radius: 3px !important;
+          font-size: 13px !important;
+        }
+        
+        /* Gmail signature styling */
+        .email-body .gmail_signature,
+        .email-body div[data-smartmail="gmail_signature"] {
+          margin-top: 16px !important;
+          padding-top: 16px !important;
+          border-top: 1px solid ${darkMode ? '#5f6368' : '#dadce0'} !important;
+          color: ${darkMode ? '#9aa0a6' : '#5f6368'} !important;
+          font-size: 13px !important;
+        }
+        
+        /* Gmail quote styling */
+        .email-body .gmail_quote {
+          margin: 16px 0 !important;
+          padding-left: 16px !important;
+          border-left: 4px solid ${darkMode ? '#5f6368' : '#dadce0'} !important;
+          color: ${darkMode ? '#9aa0a6' : '#5f6368'} !important;
+        }
+        
+        /* Remove unwanted inherited styles */
+        .email-body * {
+          box-shadow: none !important;
+          text-shadow: none !important;
+        }
+        
+        /* Ensure proper background colors for nested elements */
+        .email-body div,
+        .email-body span,
+        .email-body p {
+          background: transparent !important;
+        }
+        
+        /* Better spacing for email formatting */
+        .email-body > div:first-child {
+          margin-top: 0 !important;
+        }
+        
+        .email-body > div:last-child {
+          margin-bottom: 0 !important;
+        }
+        
+        /* Handle Gmail's specific formatting */
+        .email-body div[style*="margin"] {
+          margin: 8px 0 !important;
+        }
+        
+        /* Mobile responsiveness */
+        @media screen and (max-width: 600px) {
+          .email-body {
+            font-size: 16px !important;
+          }
+          
+          .email-body table {
+            width: 100% !important;
+            display: block !important;
+            overflow-x: auto !important;
+            white-space: nowrap !important;
+          }
+          
+          .email-body img {
+            max-width: 100% !important;
+            width: auto !important;
+          }
+          
+          .email-body pre {
+            font-size: 14px !important;
+          }
+          
+          .email-body code {
+            font-size: 14px !important;
+          }
+        }
+        
+        /* Attachments styling (if needed later) */
+        .attachments {
+          margin-top: 20px !important;
+          padding-top: 16px !important;
+          border-top: 1px solid ${darkMode ? '#5f6368' : '#dadce0'} !important;
+        }
+        
+        .attachment {
+          display: inline-flex !important;
+          align-items: center !important;
+          background: ${darkMode ? '#303134' : '#f8f9fa'} !important;
+          border: 1px solid ${darkMode ? '#5f6368' : '#dadce0'} !important;
+          padding: 8px 12px !important;
+          margin: 4px 8px 4px 0 !important;
+          border-radius: 8px !important;
+          text-decoration: none !important;
+          color: ${darkMode ? '#8ab4f8' : '#1a73e8'} !important;
+          font-size: 13px !important;
+          transition: background-color 0.2s !important;
+        }
+        
+        .attachment:hover {
+          background: ${darkMode ? '#3c4043' : '#e8f0fe'} !important;
+        }
+      </style>
+    `;
+
+    // Remove existing styles and add new ones
+    const existingStyles = document.getElementById('email-content-styles');
+    if (existingStyles) {
+      existingStyles.remove();
+    }
+    
+    document.head.insertAdjacentHTML('beforeend', emailStyles);
+
+    // Cleanup function
+    return () => {
+      const styles = document.getElementById('email-content-styles');
+      if (styles) {
+        styles.remove();
+      }
+    };
+  }, [darkMode]);
 
   return (
     <div className={`h-screen flex overflow-hidden ${darkMode ? 'dark bg-gray-900' : 'bg-white'}`}>
