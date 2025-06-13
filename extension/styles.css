@@ -1,81 +1,215 @@
-/* No custom styles - Gmail default appearance restored */
+/* Velocitas Modern Theme for Gmail */
 
-/* Hide support question mark icon */
-a[aria-label="Support"] {
+/* Apply styles only when the modern theme is active */
+body.velocitas-modern-theme {
+  /* Next.js-inspired Font Stack */
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+  background-color: #FFFFE0 !important; /* Light Yellow background */
+  color: #333333 !important; /* Default text color */
+}
+
+/* --- Original Hide Rules (Scoped) --- */
+/* These rules will only apply when the theme is enabled */
+
+body.velocitas-modern-theme a[aria-label="Support"] {
     display: none !important;
 }
 
-/* Hide settings button */
-a[aria-label="Settings"] {
+body.velocitas-modern-theme a[aria-label="Settings"] {
     display: none !important;
 }
 
-/* Hide side panel */
-.bAw.bcf.tRcrsc {
+body.velocitas-modern-theme .bAw.bcf.tRcrsc { /* Side panel (Calendar, Keep, Tasks) */
     display: none !important;
 }
 
-/* Hide side panel container */
-.brC-aT5-aOt-Jw {
+body.velocitas-modern-theme .brC-aT5-aOt-Jw { /* Side panel container */
     display: none !important;
 }
 
-/* Hide left sidebar/navigation panel */
-.aeN.WR.baA.nH.oy8Mbf.bhZ {
+/* Consider if you want to hide the main navigation or restyle it.
+   For a "Next.js vibe", often navigation is minimalist but present.
+   If you want to see it, comment out these lines. */
+body.velocitas-modern-theme .aeN.WR.baA.nH.oy8Mbf.bhZ { /* Left sidebar/navigation panel */
     display: none !important;
 }
 
-/* Hide left navigation container */
-div[role="navigation"].aeN {
+body.velocitas-modern-theme div[role="navigation"].aeN { /* Left navigation container */
     display: none !important;
 }
 
-/* Hide email toolbar */
-div[id=":4"].aeH {
+
+body.velocitas-modern-theme div[id=":4"].aeH, /* Email toolbar */
+body.velocitas-modern-theme .aeH .D.E.G-atb, /* Email toolbar container */
+body.velocitas-modern-theme .nH.aqK /* Email management toolbar */ {
     display: none !important;
 }
 
-/* Hide email toolbar container */
-.aeH .D.E.G-atb {
+body.velocitas-modern-theme .gb_J.gb_dd.gb_0, /* Google apps menu (9-dot grid) */
+body.velocitas-modern-theme a[aria-label="Google apps"] {
     display: none !important;
 }
 
-/* Hide email management toolbar */
-.nH.aqK {
+body.velocitas-modern-theme .gb_Lc, /* Hamburger menu */
+body.velocitas-modern-theme div[aria-label="Main menu"] {
     display: none !important;
 }
 
-/* Hide Google apps menu (9-dot grid) */
-.gb_J.gb_dd.gb_0 {
+/* Search bar - consider restyling instead of hiding for a modern UI */
+body.velocitas-modern-theme .gb_xe, /* Hide search bar container */
+body.velocitas-modern-theme form[role="search"],
+body.velocitas-modern-theme .gb_jd.gb_bf.bas.aJf {
     display: none !important;
 }
 
-/* Hide Google apps button */
-a[aria-label="Google apps"] {
-    display: none !important;
+
+/* --- Modern Look & Feel --- */
+
+/* Style the main content area where emails are listed and read */
+body.velocitas-modern-theme .nH.bkK, /* Main email list view */
+body.velocitas-modern-theme .nH.bkL { /* Main email reading pane view */
+  background-color: #ffffff !important; /* White content background */
+  border-radius: 8px !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.05) !important;
+  margin: 16px !important; /* Add some margin around the main content */
+  padding: 0 !important; /* Reset padding if overriding a container */
 }
 
-/* Hide hamburger menu */
-.gb_Lc {
-    display: none !important;
+/* Email Row Styling */
+body.velocitas-modern-theme .zA { /* Individual email row */
+  border-bottom: 1px solid #FFFACD !important; /* Lighter yellow border */
+  padding: 12px 18px !important;
+}
+body.velocitas-modern-theme .zA:hover {
+  background-color: #FFF9C4 !important; /* Light yellow hover */
+}
+body.velocitas-modern-theme .zA.PE { /* Selected email row */
+  background-color: #FFEECA !important; /* Brighter valid yellow for selection */
+  box-shadow: inset 3px 0 0 #FFD700 !important; /* Gold accent for selection */
 }
 
-/* Hide main menu button */
-div[aria-label="Main menu"] {
-    display: none !important;
+/* Typography in email rows */
+body.velocitas-modern-theme .yO, /* Sender */
+body.velocitas-modern-theme .zF { /* Subject/Snippet */
+  font-size: 14px !important;
+}
+body.velocitas-modern-theme .yO {
+  font-weight: 600 !important;
+  color: #2c3e50 !important;
+}
+body.velocitas-modern-theme .xS { /* Snippet text */
+    color: #555 !important;
 }
 
-/* Hide search bar container */
-.gb_xe {
-    display: none !important;
+
+/* Modernize Compose Button (if it becomes visible or you re-enable parts of toolbar) */
+body.velocitas-modern-theme div[gh="cm"] { /* Common selector for Compose button */
+  background-color: #FFD700 !important; /* Gold */
+  color: #333333 !important; /* Dark text for contrast */
+  border-radius: 20px !important;
+  padding: 10px 20px !important;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+  transition: background-color 0.2s ease !important;
+}
+body.velocitas-modern-theme div[gh="cm"]:hover {
+  background-color: #FFC107 !important; /* Darker Gold/Amber */
 }
 
-/* Hide search form */
-form[role="search"] {
-    display: none !important;
+/* --- Icon Overrides (Illustrative Examples) --- */
+/* Replacing icons requires specific selectors and SVG/font icons.
+   These are generic examples. You'll need to find the actual selectors for Gmail's icons. */
+
+/* Example: Try to style a generic icon button (e.g., if one was for 'refresh')
+   This selector is a guess for an icon that might be in a toolbar.
+*/
+body.velocitas-modern-theme .asa[aria-label="Refresh"] .ar6 {
+  font-size: 0 !important; /* Hide existing icon if it's a font icon */
+}
+body.velocitas-modern-theme .asa[aria-label="Refresh"] .ar6::before {
+  content: '';
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  background-color: #555; /* New icon color - adjust if needed for yellow theme */
+  -webkit-mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>');
+  mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>');
+  background-repeat: no-repeat;
+  background-size: contain;
 }
 
-/* Hide Gmail search form */
-.gb_jd.gb_bf.bas.aJf {
-    display: none !important;
+/* Example: Style a generic "more options" (three dots) icon
+   Again, '.some-icon-wrapper .actual-icon-element' is a placeholder for real selectors.
+*/
+/* body.velocitas-modern-theme .some-icon-wrapper .actual-icon-element {
+  /* Hide original icon if it's text/font-based or an img */
+  /* display: none !important; or font-size: 0 !important; or visibility: hidden !important; */
+/* } */
+body.velocitas-modern-theme .some-icon-wrapper::before {
+  content: '';
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  background-color: #555; /* New icon color - adjust if needed for yellow theme */
+  -webkit-mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>');
+  mask-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>');
+  background-repeat: no-repeat;
+  background-size: contain;
+  vertical-align: middle;
 }
+
+/* If you want to use a specific icon library (e.g., Font Awesome) after including it:
+body.velocitas-modern-theme .some-gmail-icon-selector::before {
+  font-family: "Font Awesome 6 Free";
+  font-weight: 900;
+  content: "\f007"; // Example: user icon
+  font-size: 18px;
+  color: #337ab7;
+}
+*/
+
+/* Remove default Gmail borders from some toolbars if they are made visible and restyled */
+body.velocitas-modern-theme .D.G-atb, body.velocitas-modern-theme .Di {
+    border: none !important;
+}
+
+/* Style for buttons in general, if any are visible or made visible */
+body.velocitas-modern-theme .J-at1-auR { /* Common class for buttons */
+    background-color: #FFF9C4 !important; /* Light yellow */
+    color: #333333 !important;
+    border: 1px solid #FFEE58 !important; /* Yellow border */
+    border-radius: 4px !important;
+    padding: 6px 12px !important;
+    box-shadow: none !important;
+    transition: background-color 0.15s ease-in-out, border-color 0.15s ease-in-out !important;
+}
+body.velocitas-modern-theme .J-at1-auR:hover {
+    background-color: #FFEE58 !important; /* Brighter yellow */
+    border-color: #FFD700 !important; /* Gold border */
+}
+
+/* Ensure high specificity if Gmail's own styles are overriding */
+body.velocitas-modern-theme .nH.Hd[role="main"] {
+    padding: 20px !important; /* Add padding to the main email content area */
+}
+
+/* Styles for Date Group Headers */
+body.velocitas-modern-theme .velocitas-date-group-header td {
+  background-color: #f0f0f0 !important; /* Light grey background for headers */
+  color: #333333 !important;
+  padding: 8px 18px !important;
+  font-weight: bold !important;
+  font-size: 13px !important;
+  border-top: 1px solid #dddddd !important;
+  border-bottom: 1px solid #dddddd !important;
+}
+
+/* Yellow & White Theme Adjustments for Date Group Headers */
+body.velocitas-modern-theme .velocitas-date-group-header td {
+  background-color: #FFFACD !important; /* Light yellow background for headers */
+  color: #4A4A4A !important; /* Darker text for readability on yellow */
+  border-top: 1px solid #FFEE58 !important;
+  border-bottom: 1px solid #FFEE58 !important;
+}
+
+
+/* Further fine-tuning will be needed by inspecting Gmail's live DOM */
