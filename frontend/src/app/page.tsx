@@ -9,9 +9,10 @@ const API_BASE = 'http://localhost:8002'; // Updated to your new FastAPI server
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [darkMode, setDarkMode] = useState(false);
+  const [darkMode, setDarkMode] = useState(true); // Default to dark mode
   const [initialSyncComplete, setInitialSyncComplete] = useState(false);
   const [user, setUser] = useState<any>(null);
+  const [showAuth, setShowAuth] = useState(false); // New state to control auth form visibility
 
   // Function to trigger initial email sync
   const triggerInitialSync = async () => {
@@ -136,31 +137,49 @@ export default function App() {
     );
   }
 
-  // Show auth page if not authenticated
-  if (!isAuthenticated) {
-    return <AuthPage darkMode={darkMode} setDarkMode={setDarkMode} onAuthSuccess={(userData) => {
-      setUser(userData);
-      setIsAuthenticated(true);
-      triggerInitialSync();
-    }} />;
+  // Show dashboard if authenticated
+  if (isAuthenticated) {
+    return (
+      <DashboardPage 
+        darkMode={darkMode} 
+        setDarkMode={setDarkMode}
+        initialSyncComplete={initialSyncComplete}
+        user={user}
+      />
+    );
   }
 
-  // Show dashboard if authenticated
-  return (
-    <DashboardPage 
+  // Show auth form if user clicked to sign in
+  if (showAuth) {
+    return <AuthPage 
       darkMode={darkMode} 
+      setDarkMode={setDarkMode} 
+      onAuthSuccess={(userData) => {
+        setUser(userData);
+        setIsAuthenticated(true);
+        setShowAuth(false);
+        triggerInitialSync();
+      }}
+      onBack={() => setShowAuth(false)}
+    />;
+  }
+
+  // Show landing page by default
+  return (
+    <LandingPage 
+      onGetStarted={() => setShowAuth(true)}
+      darkMode={darkMode}
       setDarkMode={setDarkMode}
-      initialSyncComplete={initialSyncComplete}
-      user={user}
     />
   );
 }
 
-// Updated Auth Page Component
-function AuthPage({ darkMode, setDarkMode, onAuthSuccess }: { 
+// Updated Auth Page Component with back button
+function AuthPage({ darkMode, setDarkMode, onAuthSuccess, onBack }: { 
   darkMode: boolean; 
   setDarkMode: (dark: boolean) => void;
   onAuthSuccess: (userData: any) => void;
+  onBack: () => void;
 }) {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
@@ -212,6 +231,14 @@ function AuthPage({ darkMode, setDarkMode, onAuthSuccess }: {
   return (
     <div className={`min-h-screen flex items-center justify-center ${darkMode ? 'bg-gray-900' : 'bg-gray-50'}`}>
       <div className={`max-w-md w-full mx-4 p-8 rounded-lg shadow-lg ${darkMode ? 'bg-gray-800' : 'bg-white'}`}>
+        {/* Back button */}
+        <button
+          onClick={onBack}
+          className={`mb-4 text-sm flex items-center gap-2 ${darkMode ? 'text-gray-400 hover:text-gray-300' : 'text-gray-600 hover:text-gray-700'}`}
+        >
+          ← Back to landing page
+        </button>
+
         <div className="text-center mb-8">
           <h1 className={`text-2xl font-bold mb-2 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
             Welcome to Velocitas
