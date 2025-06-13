@@ -4,8 +4,10 @@ const nextConfig = {
   trailingSlash: true,
   images: {
     unoptimized: true
-  }
-  // Remove the distDir line - it's causing the conflict
+  },
+  // Add the base path for GitHub Pages
+  basePath: process.env.GITHUB_PAGES ? '/Velocitas' : '',
+  assetPrefix: process.env.GITHUB_PAGES ? '/Velocitas' : '',
 }
 
 module.exports = nextConfig
