@@ -49,7 +49,10 @@ async def search_emails_async(query=None, limit=50, user_id=None):
                     'sender': email.sender,
                     'snippet': email.snippet,
                     'internal_date': email.internal_date.isoformat(),
-                    'category': email.category
+                    'category': email.category,
+                    'is_starred': email.is_starred,
+                    'is_read': email.is_read,
+                    'urgency': email.urgency
                 }
                 for email in emails
             ]
@@ -130,6 +133,9 @@ def get_email_by_id(email_id, user_id=None):
             'html_body': email.html_body,
             'plain_body': email.plain_body,
             'category': email.category,
+            'is_starred': email.is_starred,
+            'is_read': email.is_read,
+            'urgency': email.urgency,
             'label_ids': email.label_ids.split(',') if email.label_ids else [],
             'internal_date': email.internal_date.isoformat(),
             'attachments': [
@@ -151,7 +157,11 @@ def get_email_by_id(email_id, user_id=None):
                     'html_body': thread_email.html_body,
                     'plain_body': thread_email.plain_body,
                     'internal_date': thread_email.internal_date.isoformat(),
-                    'is_current': thread_email.id == email_id
+                    'is_current': thread_email.id == email_id,
+                    'category': thread_email.category,
+                    'is_starred': thread_email.is_starred,
+                    'is_read': thread_email.is_read,
+                    'urgency': thread_email.urgency
                 }
                 for thread_email in thread_emails
             ]
@@ -208,7 +218,10 @@ def search_emails(query=None, limit=50):
                 'sender': email.sender,
                 'snippet': email.snippet,
                 'internal_date': email.internal_date.isoformat(),
-                'category': email.category
+                'category': email.category,
+                'is_starred': email.is_starred,
+                'is_read': email.is_read,
+                'urgency': email.urgency
             }
             for email in emails
         ]
@@ -234,7 +247,10 @@ def get_user_emails(user_id, limit=50, offset=0):
                 'sender': email.sender,
                 'snippet': email.snippet,
                 'internal_date': email.internal_date.isoformat(),
-                'category': email.category
+                'category': email.category,
+                'is_starred': email.is_starred,
+                'is_read': email.is_read,
+                'urgency': email.urgency
             }
             for email in emails
         ]

@@ -159,17 +159,27 @@ def download_emails_for_user():
             ).first()
             
             if existing_email:
-                print(f"📧 Email already exists: {subject[:30]}...")
+                # Email exists - check if labels have changed and update if needed
+                current_labels = ",".join(msg.get('labelIds', []))
+                if existing_email.label_ids != current_labels:
+                    print(f"📧 Updating labels for existing email: {subject[:30]}...")
+                    update_existing_email_from_labels(msg['id'], msg.get('labelIds', []), session)
+                else:
+                    print(f"📧 Email already exists and up-to-date: {subject[:30]}...")
                 continue
 
             # Get HTML and plain body - fixed extraction
             html_body = extract_payload(msg['payload'], 'text/html')
             plain_body = extract_payload(msg['payload'], 'text/plain')
             
+            # Parse Gmail labels to extract status information
+            label_info = parse_gmail_labels(msg.get('labelIds', []))
+            
             # Debug print to see what we're getting
             print(f"Email: {subject[:30]}... | HTML: {len(html_body)} chars | Plain: {len(plain_body)} chars")
+            print(f"Labels: {labels} | Starred: {label_info['is_starred']} | Read: {label_info['is_read']} | Category: {label_info['category']} | Urgency: {label_info['urgency']}")
 
-            # Save email with user association
+            # Save email with user association and parsed label information
             email = Email(
                 id=msg['id'],
                 user_id=user.id,  # Associate with user
@@ -180,7 +190,10 @@ def download_emails_for_user():
                 snippet=snippet,
                 html_body=html_body,
                 plain_body=plain_body,
-                category='SPAM' if 'SPAM' in labels else 'INBOX',
+                category=label_info['category'],
+                is_starred=label_info['is_starred'],
+                is_read=label_info['is_read'],
+                urgency=label_info['urgency'],
                 label_ids=labels,
                 internal_date=internal_date
             )
@@ -276,16 +289,26 @@ def download_emails_for_user_with_service(service, user, session):
             ).first()
             
             if existing_email:
-                print(f"📧 Email already exists: {subject[:30]}...")
+                # Email exists - check if labels have changed and update if needed
+                current_labels = ",".join(msg.get('labelIds', []))
+                if existing_email.label_ids != current_labels:
+                    print(f"📧 Updating labels for existing email: {subject[:30]}...")
+                    update_existing_email_from_labels(msg['id'], msg.get('labelIds', []), session)
+                else:
+                    print(f"📧 Email already exists and up-to-date: {subject[:30]}...")
                 continue
 
             # Get HTML and plain body
             html_body = extract_payload(msg['payload'], 'text/html')
             plain_body = extract_payload(msg['payload'], 'text/plain')
             
+            # Parse Gmail labels to extract status information
+            label_info = parse_gmail_labels(msg.get('labelIds', []))
+            
             print(f"Email: {subject[:30]}... | HTML: {len(html_body)} chars | Plain: {len(plain_body)} chars")
+            print(f"Labels: {labels} | Starred: {label_info['is_starred']} | Read: {label_info['is_read']} | Category: {label_info['category']} | Urgency: {label_info['urgency']}")
 
-            # Save email with user association
+            # Save email with user association and parsed label information
             email = Email(
                 id=msg['id'],
                 user_id=user.id,
@@ -296,7 +319,10 @@ def download_emails_for_user_with_service(service, user, session):
                 snippet=snippet,
                 html_body=html_body,
                 plain_body=plain_body,
-                category='SPAM' if 'SPAM' in labels else 'INBOX',
+                category=label_info['category'],
+                is_starred=label_info['is_starred'],
+                is_read=label_info['is_read'],
+                urgency=label_info['urgency'],
                 label_ids=labels,
                 internal_date=internal_date
             )
@@ -321,6 +347,82 @@ def download_emails_for_user_with_service(service, user, session):
         print(f"❌ Error downloading emails: {e}")
         session.rollback()
         raise
+
+def parse_gmail_labels(label_ids):
+    """Parse Gmail labels and extract status information"""
+    labels = label_ids if isinstance(label_ids, list) else label_ids.split(',')
+    
+    # Check for starred status
+    is_starred = 'STARRED' in labels
+    
+    # Check for read status (UNREAD label means it's unread, absence means it's read)
+    is_read = 'UNREAD' not in labels
+    
+    # Determine category based on Gmail labels
+    category = 'INBOX'  # default
+    if 'SPAM' in labels:
+        category = 'SPAM'
+    elif 'CATEGORY_PROMOTIONS' in labels:
+        category = 'PROMOTIONS'
+    elif 'CATEGORY_SOCIAL' in labels:
+        category = 'SOCIAL'
+    elif 'CATEGORY_UPDATES' in labels:
+        category = 'UPDATES'
+    elif 'CATEGORY_FORUMS' in labels:
+        category = 'FORUMS'
+    elif 'CATEGORY_PERSONAL' in labels:
+        category = 'PERSONAL'
+    elif 'IMPORTANT' in labels:
+        category = 'IMPORTANT'
+    elif 'SENT' in labels:
+        category = 'SENT'
+    elif 'DRAFT' in labels:
+        category = 'DRAFT'
+    
+    # Determine urgency based on labels (basic logic)
+    urgency = 50  # default
+    if 'IMPORTANT' in labels:
+        urgency = 80
+    elif 'CATEGORY_PROMOTIONS' in labels:
+        urgency = 20
+    elif 'SPAM' in labels:
+        urgency = 10
+    elif 'CATEGORY_PERSONAL' in labels:
+        urgency = 70
+    elif 'CATEGORY_UPDATES' in labels:
+        urgency = 40
+    
+    return {
+        'is_starred': is_starred,
+        'is_read': is_read,
+        'category': category,
+        'urgency': urgency
+    }
+
+def update_existing_email_from_labels(email_id, label_ids, session):
+    """Update an existing email's fields based on current Gmail labels"""
+    try:
+        email = session.query(Email).filter(Email.id == email_id).first()
+        if not email:
+            return False
+        
+        # Parse the current labels
+        label_info = parse_gmail_labels(label_ids)
+        
+        # Update the email fields
+        email.is_starred = label_info['is_starred']
+        email.is_read = label_info['is_read']
+        email.category = label_info['category']
+        email.urgency = label_info['urgency']
+        email.label_ids = ",".join(label_ids) if isinstance(label_ids, list) else label_ids
+        
+        session.commit()
+        return True
+        
+    except Exception as e:
+        print(f"Error updating email {email_id}: {e}")
+        session.rollback()
+        return False
 
 # Only run when called directly
 if __name__ == '__main__':

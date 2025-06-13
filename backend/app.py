@@ -69,6 +69,12 @@ class UserResponse(BaseModel):
     created_at: datetime
     last_login: Optional[datetime]
 
+class EmailUpdateRequest(BaseModel):
+    is_starred: Optional[bool] = None
+    is_read: Optional[bool] = None
+    category: Optional[str] = None
+    urgency: Optional[int] = None
+
 # Helper function to get client IP
 def get_client_ip(request: Request) -> str:
     """Get client IP address from request"""
@@ -330,6 +336,112 @@ async def periodic_cleanup():
         except Exception as e:
             print(f"Cleanup error: {e}")
             await asyncio.sleep(3600)
+
+@app.put("/email/{email_id}")
+async def update_email(
+    email_id: str,
+    update_data: EmailUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id)
+):
+    """Update email properties (starred, read, category, urgency) for the authenticated user"""
+    from models import DatabaseSession, Email
+    
+    session = DatabaseSession()
+    try:
+        # Find the email and verify it belongs to the current user
+        email = session.query(Email).filter(
+            Email.id == email_id,
+            Email.user_id == current_user_id
+        ).first()
+        
+        if not email:
+            raise HTTPException(status_code=404, detail="Email not found")
+        
+        # Update fields if provided
+        if update_data.is_starred is not None:
+            email.is_starred = update_data.is_starred
+        if update_data.is_read is not None:
+            email.is_read = update_data.is_read
+        if update_data.category is not None:
+            email.category = update_data.category
+        if update_data.urgency is not None:
+            if update_data.urgency < 1 or update_data.urgency > 100:
+                raise HTTPException(status_code=400, detail="Urgency must be between 1 and 100")
+            email.urgency = update_data.urgency
+        
+        session.commit()
+        
+        return {
+            "message": "Email updated successfully",
+            "email_id": email_id,
+            "updated_fields": {
+                "is_starred": email.is_starred,
+                "is_read": email.is_read,
+                "category": email.category,
+                "urgency": email.urgency
+            }
+        }
+        
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update email: {str(e)}")
+    finally:
+        session.close()
+
+@app.put("/emails/bulk-update")
+async def bulk_update_emails(
+    email_ids: list[str],
+    update_data: EmailUpdateRequest,
+    current_user_id: str = Depends(get_current_user_id)
+):
+    """Bulk update email properties for multiple emails"""
+    from models import DatabaseSession, Email
+    
+    session = DatabaseSession()
+    try:
+        # Find emails that belong to the current user
+        emails = session.query(Email).filter(
+            Email.id.in_(email_ids),
+            Email.user_id == current_user_id
+        ).all()
+        
+        if not emails:
+            raise HTTPException(status_code=404, detail="No emails found")
+        
+        updated_count = 0
+        for email in emails:
+            # Update fields if provided
+            if update_data.is_starred is not None:
+                email.is_starred = update_data.is_starred
+            if update_data.is_read is not None:
+                email.is_read = update_data.is_read
+            if update_data.category is not None:
+                email.category = update_data.category
+            if update_data.urgency is not None:
+                if update_data.urgency < 1 or update_data.urgency > 100:
+                    raise HTTPException(status_code=400, detail="Urgency must be between 1 and 100")
+                email.urgency = update_data.urgency
+            updated_count += 1
+        
+        session.commit()
+        
+        return {
+            "message": f"Successfully updated {updated_count} emails",
+            "updated_count": updated_count,
+            "total_requested": len(email_ids)
+        }
+        
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to bulk update emails: {str(e)}")
+    finally:
+        session.close()
 
 if __name__ == '__main__':
     import uvicorn

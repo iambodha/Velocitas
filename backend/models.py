@@ -44,6 +44,9 @@ class Email(Base):
     category = Column(String)
     label_ids = Column(Text)
     internal_date = Column(DateTime)
+    is_starred = Column(Boolean, default=False)
+    is_read = Column(Boolean, default=False)
+    urgency = Column(Integer, default=50)  # Score from 1 to 100, default 50
     
     # Relationships
     user = relationship("User", back_populates="emails")

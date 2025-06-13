@@ -15,11 +15,7 @@ import {
   Sparkles,
   TrendingUp,
   Clock,
-  ChevronDown,
-  X,
-  MessageSquare,
-  Download,
-  AlertCircle
+  ChevronDown
 } from 'lucide-react';
 
 interface LandingPageProps {
@@ -31,7 +27,6 @@ interface LandingPageProps {
 export default function LandingPage({ onGetStarted, darkMode, setDarkMode }: LandingPageProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [animatedStats, setAnimatedStats] = useState({ users: 0, emails: 0, time: 0 });
-  const [showAccessModal, setShowAccessModal] = useState(false);
 
   // Animate stats on mount
   useEffect(() => {
@@ -58,8 +53,14 @@ export default function LandingPage({ onGetStarted, darkMode, setDarkMode }: Lan
   }, []);
 
   const handleGetStarted = async () => {
-    // Show the access modal instead of proceeding with auth
-    setShowAccessModal(true);
+    setIsLoading(true);
+    try {
+      await onGetStarted();
+    } catch (error) {
+      console.error('Authentication failed:', error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const features = [
@@ -411,88 +412,6 @@ export default function LandingPage({ onGetStarted, darkMode, setDarkMode }: Lan
           </div>
         </div>
       </footer>
-
-      {/* Access Modal */}
-      {showAccessModal && (
-        <div className="fixed inset-0 flex items-center justify-center z-50">
-          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setShowAccessModal(false)}></div>
-          <div className={`relative rounded-3xl shadow-2xl p-8 max-w-md mx-4 ${darkMode ? 'bg-gray-800 border border-gray-700' : 'bg-white border border-gray-200'} backdrop-blur-lg`}>
-            <button
-              onClick={() => setShowAccessModal(false)}
-              className={`absolute top-4 right-4 p-2 rounded-lg transition-colors ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
-            >
-              <X className="w-5 h-5" />
-            </button>
-
-            <div className="text-center mb-6">
-              <div className="w-16 h-16 bg-gradient-to-r from-yellow-400 to-orange-500 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                <AlertCircle className="w-8 h-8 text-white" />
-              </div>
-              <h3 className={`text-2xl font-bold mb-2 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
-                Google Verification Required
-              </h3>
-              <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                Due to Google's OAuth policies, this app requires verification for public access
-              </p>
-            </div>
-
-            <div className={`p-4 rounded-xl mb-6 ${darkMode ? 'bg-gray-700/50 border border-gray-600/30' : 'bg-gray-50 border border-gray-200'}`}>
-              <p className={`text-sm mb-4 ${darkMode ? 'text-gray-300' : 'text-gray-600'} leading-relaxed`}>
-                While we work on Google's app verification process, you can still experience Velocitas through these options:
-              </p>
-            </div>
-
-            <div className="space-y-4">
-              <div className={`p-4 rounded-xl border-2 border-dashed transition-all hover:scale-105 ${darkMode ? 'border-gray-600 hover:border-yellow-500/50 bg-gray-800/50' : 'border-gray-300 hover:border-yellow-500/50 bg-gray-50/50'} cursor-pointer`}>
-                <div className="flex items-center gap-3 mb-2">
-                  <Download className="w-5 h-5 text-blue-500" />
-                  <span className={`font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>Local Installation</span>
-                </div>
-                <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                  Clone the repository and run Velocitas locally on your machine
-                </p>
-              </div>
-
-              <div className={`p-4 rounded-xl border-2 border-dashed transition-all hover:scale-105 ${darkMode ? 'border-gray-600 hover:border-yellow-500/50 bg-gray-800/50' : 'border-gray-300 hover:border-yellow-500/50 bg-gray-50/50'} cursor-pointer`}>
-                <div className="flex items-center gap-3 mb-2">
-                  <MessageSquare className="w-5 h-5 text-green-500" />
-                  <span className={`font-semibold ${darkMode ? 'text-white' : 'text-gray-900'}`}>Direct Access Request</span>
-                </div>
-                <p className={`text-sm mb-3 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                  Message me on Slack for immediate access to the live demo
-                </p>
-                <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-lg text-xs font-medium ${darkMode ? 'bg-green-600/20 text-green-400 border border-green-600/30' : 'bg-green-100 text-green-700 border border-green-200'}`}>
-                  <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                  Slack: @bodha
-                </div>
-              </div>
-            </div>
-
-            <div className="flex gap-3 mt-8">
-              <button
-                onClick={() => setShowAccessModal(false)}
-                className={`flex-1 px-4 py-3 rounded-xl font-semibold transition-all ${darkMode ? 'bg-gray-700 text-white hover:bg-gray-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
-              >
-                Maybe Later
-              </button>
-              <button
-                onClick={() => {
-                  setShowAccessModal(false);
-                  window.open('https://github.com/iambodha/Velocitas/tree/production', '_blank');
-                }}
-                className="flex-1 px-4 py-3 bg-gradient-to-r from-yellow-500 to-yellow-600 hover:from-yellow-600 hover:to-yellow-700 text-white rounded-xl font-semibold transition-all transform hover:scale-105 flex items-center justify-center gap-2"
-              >
-                <Download className="w-4 h-4" />
-                Get Code
-              </button>
-            </div>
-
-            <p className={`text-xs text-center mt-4 ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>
-              We appreciate your interest and are working to make Velocitas publicly available soon!
-            </p>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -211,12 +211,14 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
     }
   };
 
-  // Mark email as read
+  // Mark email as read/unread
   const markEmailAsRead = async (emailId: string, isRead: boolean = true) => {
     try {
-      await fetch(`${API_BASE}/email/${emailId}/read?is_read=${isRead}`, {
+      // Use the new backend API endpoint that supports the new fields
+      await fetch(`${API_BASE}/email/${emailId}`, {
         method: 'PUT',
-        headers: getAuthHeaders()
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ is_read: isRead })
       });
 
       // Update local state
@@ -226,6 +228,10 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
       setFilteredEmails(prev => prev.map(email => 
         email.id === emailId ? { ...email, is_read: isRead } : email
       ));
+      
+      if (selectedEmail?.id === emailId) {
+        setSelectedEmail(prev => prev ? { ...prev, is_read: isRead } : null);
+      }
     } catch (err) {
       console.error('Error marking email as read:', err);
     }
@@ -234,9 +240,11 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
   // Toggle email star
   const toggleEmailStar = async (emailId: string, isStarred: boolean) => {
     try {
-      await fetch(`${API_BASE}/email/${emailId}/star?is_starred=${isStarred}`, {
+      // Use the new backend API endpoint that supports the new fields
+      await fetch(`${API_BASE}/email/${emailId}`, {
         method: 'PUT',
-        headers: getAuthHeaders()
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ is_starred: isStarred })
       });
 
       // Update local state
@@ -252,6 +260,56 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
       }
     } catch (err) {
       console.error('Error toggling email star:', err);
+    }
+  };
+
+  // Update email category and urgency
+  const updateEmailFields = async (emailId: string, fields: { category?: string; urgency?: number }) => {
+    try {
+      await fetch(`${API_BASE}/email/${emailId}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(fields)
+      });
+
+      // Update local state
+      setEmails(prev => prev.map(email => 
+        email.id === emailId ? { ...email, ...fields } : email
+      ));
+      setFilteredEmails(prev => prev.map(email => 
+        email.id === emailId ? { ...email, ...fields } : email
+      ));
+      
+      if (selectedEmail?.id === emailId) {
+        setSelectedEmail(prev => prev ? { ...prev, ...fields } : null);
+      }
+    } catch (err) {
+      console.error('Error updating email fields:', err);
+    }
+  };
+
+  // Bulk update emails
+  const bulkUpdateEmails = async (emailIds: string[], fields: { is_read?: boolean; is_starred?: boolean; category?: string; urgency?: number }) => {
+    try {
+      await fetch(`${API_BASE}/emails/bulk-update`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ email_ids: emailIds, ...fields })
+      });
+
+      // Update local state
+      setEmails(prev => prev.map(email => 
+        emailIds.includes(email.id) ? { ...email, ...fields } : email
+      ));
+      setFilteredEmails(prev => prev.map(email => 
+        emailIds.includes(email.id) ? { ...email, ...fields } : email
+      ));
+      
+      if (selectedEmail && emailIds.includes(selectedEmail.id)) {
+        setSelectedEmail(prev => prev ? { ...prev, ...fields } : null);
+      }
+    } catch (err) {
+      console.error('Error bulk updating emails:', err);
     }
   };
 
@@ -1163,6 +1221,20 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
                     </div>
                   </div>
                   <div className="flex items-center gap-1 md:gap-2">
+                    {/* Mark as Read/Unread Button */}
+                    <button 
+                      onClick={() => markEmailAsRead(selectedEmail.id, !selectedEmail.is_read)}
+                      className={`p-2 rounded-lg transition-colors ${
+                        darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'
+                      }`}
+                      title={selectedEmail.is_read ? 'Mark as unread' : 'Mark as read'}
+                    >
+                      <Mail size={18} className={`${
+                        selectedEmail.is_read 
+                          ? darkMode ? 'text-gray-400' : 'text-gray-500'
+                          : darkMode ? 'text-blue-400' : 'text-blue-600'
+                      }`} />
+                    </button>
                     <button className={`p-2 rounded-lg transition-colors ${darkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}>
                       <Archive size={18} className={darkMode ? 'text-gray-400' : ''} />
                     </button>
