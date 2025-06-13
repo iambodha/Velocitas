@@ -1,8 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  reactStrictMode: true,
-  // Disable the Next.js loading indicator
-  nprogress: false,
-};
+  output: 'export',
+  trailingSlash: true,
+  images: {
+    unoptimized: true
+  },
+  // Add this to ensure proper static export
+  distDir: 'out'
+}
 
-module.exports = nextConfig;
+module.exports = nextConfig
