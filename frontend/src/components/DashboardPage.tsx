@@ -127,6 +127,7 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
   const [filteredEmails, setFilteredEmails] = useState<Email[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [showSyncStatus, setShowSyncStatus] = useState(false);
+  const [currentView, setCurrentView] = useState<'inbox' | 'starred'>('inbox');
 
   // Helper function to get auth headers
   const getAuthHeaders = () => {
@@ -143,7 +144,8 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
     setError(null);
     
     try {
-      const response = await fetch(`${API_BASE}/emails?max_results=50`, {
+      const endpoint = currentView === 'starred' ? '/emails/starred' : '/emails';
+      const response = await fetch(`${API_BASE}${endpoint}?max_results=50`, {
         headers: getAuthHeaders()
       });
 
@@ -154,7 +156,7 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
           if (refreshToken) {
             await refreshAuthToken(refreshToken);
             // Retry the request
-            const retryResponse = await fetch(`${API_BASE}/emails?max_results=50`, {
+            const retryResponse = await fetch(`${API_BASE}${endpoint}?max_results=50`, {
               headers: getAuthHeaders()
             });
             if (retryResponse.ok) {
@@ -458,6 +460,13 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
       checkGmailAccess();
     }
   }, [user]);
+
+  // Fetch emails when view changes
+  useEffect(() => {
+    if (user) {
+      fetchEmails();
+    }
+  }, [currentView]);
 
   // Update the formatEmailBody function to better handle HTML content
   const formatEmailBody = (email: Email) => {
@@ -917,28 +926,41 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
 
         {/* Navigation Items */}
         <nav className="flex-1 px-2 pt-4">
-          {sidebarItems.map((item, index) => (
-            <div
-              key={index}
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors mb-1 ${
-                item.active 
-                  ? `bg-yellow-100 text-yellow-700 ${darkMode ? 'dark:bg-yellow-900 dark:text-yellow-300' : ''}` 
-                  : `hover:bg-gray-100 ${darkMode ? 'text-gray-300 hover:bg-gray-700' : 'text-gray-700'}`
-              }`}
-            >
-              <item.icon size={20} className={!sidebarOpen ? 'm-auto' : ''} />
-              {sidebarOpen && (
-                <>
-                  <span className="flex-1 text-sm font-medium">{item.label}</span>
-                  {item.count && (
-                    <span className={`text-xs px-2 py-1 rounded-full ${darkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-600'}`}>
-                      {item.count}
-                    </span>
-                  )}
-                </>
-              )}
-            </div>
-          ))}
+          {sidebarItems.map((item, index) => {
+            const isActive = (item.label === 'Inbox' && currentView === 'inbox') || 
+                           (item.label === 'Starred' && currentView === 'starred') ||
+                           (item.label !== 'Inbox' && item.label !== 'Starred' && item.active);
+            
+            return (
+              <div
+                key={index}
+                onClick={() => {
+                  if (item.label === 'Inbox') {
+                    setCurrentView('inbox');
+                  } else if (item.label === 'Starred') {
+                    setCurrentView('starred');
+                  }
+                }}
+                className={`flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors mb-1 ${
+                  isActive 
+                    ? `bg-yellow-100 text-yellow-700 ${darkMode ? 'dark:bg-yellow-900 dark:text-yellow-300' : ''}` 
+                    : `hover:bg-gray-100 ${darkMode ? 'text-gray-300 hover:bg-gray-700' : 'text-gray-700'}`
+                }`}
+              >
+                <item.icon size={20} className={!sidebarOpen ? 'm-auto' : ''} />
+                {sidebarOpen && (
+                  <>
+                    <span className="flex-1 text-sm font-medium">{item.label}</span>
+                    {item.count && (
+                      <span className={`text-xs px-2 py-1 rounded-full ${darkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-600'}`}>
+                        {item.count}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })}
           
           {/* Categories/Labels Section */}
           <div className={`mt-6 mb-2 ${sidebarOpen ? 'px-3' : 'text-center'}`}>
@@ -1081,7 +1103,7 @@ export default function DashboardPage({ darkMode, setDarkMode, initialSyncComple
             <div className={`${isMobileView ? 'w-full' : 'w-80 lg:w-96'} border-r flex flex-col ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}>
               <div className={`px-4 py-3 border-b flex items-center justify-between ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
                 <h2 className={`font-semibold ${darkMode ? 'text-gray-200' : 'text-gray-900'}`}>
-                  Inbox {loading && <span className="text-sm font-normal">(Loading...)</span>}
+                  {currentView === 'starred' ? 'Starred' : 'Inbox'} {loading && <span className="text-sm font-normal">(Loading...)</span>}
                 </h2>
                 <div className="flex items-center gap-2">
                   <span className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>

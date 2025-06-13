@@ -66,6 +66,10 @@ async def get_user_emails_async(user_id, limit=50, offset=0):
     # This is a placeholder implementation. In production, use a proper async database connection
     return await asyncio.to_thread(get_user_emails, user_id, limit, offset)
 
+async def get_starred_emails_async(user_id, limit=50, offset=0):
+    """Asynchronous version of get_starred_emails"""
+    return await asyncio.to_thread(get_starred_emails, user_id, limit, offset)
+
 def safe_b64decode_size(data):
     """Safely calculate base64 decoded size with error handling"""
     if not data:
@@ -235,6 +239,35 @@ def get_user_emails(user_id, limit=50, offset=0):
     try:
         emails = session.query(Email).filter(
             Email.user_id == user_id
+        ).order_by(
+            Email.internal_date.desc()
+        ).offset(offset).limit(limit).all()
+        
+        return [
+            {
+                'id': email.id,
+                'thread_id': email.thread_id,
+                'subject': email.subject,
+                'sender': email.sender,
+                'snippet': email.snippet,
+                'internal_date': email.internal_date.isoformat(),
+                'category': email.category,
+                'is_starred': email.is_starred,
+                'is_read': email.is_read,
+                'urgency': email.urgency
+            }
+            for email in emails
+        ]
+    finally:
+        session.close()
+
+def get_starred_emails(user_id, limit=50, offset=0):
+    """Get starred emails for a specific user"""
+    session = DatabaseSession()
+    try:
+        emails = session.query(Email).filter(
+            Email.user_id == user_id,
+            Email.is_starred == True
         ).order_by(
             Email.internal_date.desc()
         ).offset(offset).limit(limit).all()

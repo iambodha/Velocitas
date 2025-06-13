@@ -18,7 +18,8 @@ from email_retrieval import (
     get_email_by_id_async, 
     get_attachment_data_async, 
     search_emails_async,
-    get_user_emails_async
+    get_user_emails_async,
+    get_starred_emails_async
 )
 from gmailDownload import sync_emails_async
 from auth import (
@@ -248,6 +249,15 @@ async def get_emails(
     
     emails = await get_user_emails_async(current_user_id, limit=max_results)
     return {"emails": emails}
+
+@app.get("/emails/starred")
+async def get_starred_emails(
+    max_results: int = Query(50, description="Maximum number of starred emails to return"),
+    current_user_id: str = Depends(get_current_user_id)
+):
+    """Get starred emails for the authenticated user"""
+    starred_emails = await get_starred_emails_async(current_user_id, limit=max_results)
+    return {"emails": starred_emails}
 
 @app.get("/email/{email_id}")
 async def get_email(
