@@ -2,27 +2,24 @@
 
 class VelocitasAI {
     constructor() {
-      this.isEnabled = true; // Default, will be updated from storage
-      this.themeClassName = 'velocitas-modern-theme';
-      this.observer = null;
-      this.debounceTimeout = null;
-      this.observerRetryTimeout = null; // For retrying observer setup
-      this.observerMaxRetries = 5;    // Max retries for observer setup
-      this.observerRetryCount = 0;    // Current retry count
-      this._initializeStateAndListeners();
+        this.isEnabled = true;
+        this.themeClassName = 'velocitas-modern-theme';
+        this.observer = null;
+        this.messageListWatcher = null;
+        this.debounceTimeout = null;
+        this.isProcessing = false;
+        this._initializeStateAndListeners();
     }
 
     _initializeStateAndListeners() {
-      // Load stored enabled state
-      chrome.storage.local.get(['enabled'], (result) => {
-        this.isEnabled = result.enabled !== false;
-        // _applyChanges will now handle the initial observer setup if enabled
-        this._applyChanges(); 
+        chrome.storage.local.get(['enabled'], (result) => {
+            this.isEnabled = result.enabled !== false;
+            this._applyChanges();
 
-        if (!chrome.runtime.onMessage.hasListeners()) {
-            chrome.runtime.onMessage.addListener(this._handleMessage.bind(this));
-        }
-      });
+            if (!chrome.runtime.onMessage.hasListeners()) {
+                chrome.runtime.onMessage.addListener(this._handleMessage.bind(this));
+            }
+        });
     }
 
     _handleMessage(request, sender, sendResponse) {
@@ -32,253 +29,416 @@ class VelocitasAI {
         } else if (request.action === 'getStatus') {
             sendResponse({ enabled: this.isEnabled });
         }
-        // Return true to indicate you wish to send a response asynchronously
-        // (although in this specific case, sendResponse is called synchronously).
         return true;
     }
 
     toggle() {
-      this.isEnabled = !this.isEnabled;
-      chrome.storage.local.set({ enabled: this.isEnabled });
-      this._applyChanges();
-    }
-
-    _disconnectObserver() {
-        if (this.observer) {
-            this.observer.disconnect();
-            this.observer = null; 
-            console.log("Velocitas: MutationObserver disconnected.");
-        }
-        if (this.observerRetryTimeout) {
-            clearTimeout(this.observerRetryTimeout); 
-            this.observerRetryTimeout = null;
-        }
-        this.observerRetryCount = 0; 
+        this.isEnabled = !this.isEnabled;
+        chrome.storage.local.set({ enabled: this.isEnabled });
+        this._applyChanges();
     }
 
     _applyChanges() {
-      if (this.isEnabled) {
-        document.body.classList.add(this.themeClassName);
-        
-        // Add delay to allow Gmail to fully load
-        setTimeout(() => {
-          this.groupEmailsByDate();
-        }, 2000); // Wait 2 seconds for Gmail to load
-        
-        // If observer isn't set up, try to set it up.
-        if (!this.observer) {
-            this.observerRetryCount = 0; // Reset retries when explicitly trying to apply changes
-            this._setupMutationObserver(); 
+        if (this.isEnabled) {
+            document.body.classList.add(this.themeClassName);
+            this._startWatching();
+            this.groupEmailsByDate();
+        } else {
+            document.body.classList.remove(this.themeClassName);
+            this._ungroupEmailsByDate();
+            this._stopWatching();
         }
-      } else {
-        document.body.classList.remove(this.themeClassName);
-        this._ungroupEmailsByDate();
-        this._disconnectObserver(); // Centralized disconnect
-      }
+    }
+
+    _startWatching() {
+        if (this.messageListWatcher) {
+            this.messageListWatcher.disconnect();
+        }
+        this.messageListWatcher = this._createMessageListWatcher();
+        this.messageListWatcher.observe();
+    }
+
+    _stopWatching() {
+        if (this.messageListWatcher) {
+            this.messageListWatcher.disconnect();
+            this.messageListWatcher = null;
+        }
+        if (this.debounceTimeout) {
+            clearTimeout(this.debounceTimeout);
+            this.debounceTimeout = null;
+        }
+    }
+
+    _createMessageListWatcher() {
+        const possibleSelectors = [
+            'div[role="main"]',
+            '[role="main"]',
+            '.nH.bkK',
+            '.nH',
+            'body'
+        ];
+
+        let targetNode = null;
+        for (const selector of possibleSelectors) {
+            targetNode = document.querySelector(selector);
+            if (targetNode) break;
+        }
+
+        if (!targetNode) {
+            console.warn("Velocitas: No suitable target found for watching");
+            return { 
+                observe: () => {}, 
+                disconnect: () => {} 
+            };
+        }
+
+        const config = {
+            childList: true,
+            subtree: true,
+            attributes: false
+        };
+
+        const observer = new MutationObserver((mutations) => {
+            if (!this.isEnabled || this.isProcessing) return;
+
+            let shouldRefresh = false;
+            for (const mutation of mutations) {
+                if (mutation.type === 'childList') {
+                    // Check for email row changes
+                    const hasRelevantChanges = Array.from(mutation.addedNodes).some(node => 
+                        node.nodeType === Node.ELEMENT_NODE && 
+                        this._isEmailRelatedNode(node)
+                    ) || Array.from(mutation.removedNodes).some(node => 
+                        node.nodeType === Node.ELEMENT_NODE && 
+                        (this._isEmailRelatedNode(node) || node.classList?.contains('velocitas-date-group-header'))
+                    );
+
+                    if (hasRelevantChanges) {
+                        shouldRefresh = true;
+                        break;
+                    }
+                }
+            }
+
+            if (shouldRefresh) {
+                this._debouncedRefresh();
+            }
+        });
+
+        return {
+            observe: () => observer.observe(targetNode, config),
+            disconnect: () => observer.disconnect()
+        };
+    }
+
+    _isEmailRelatedNode(node) {
+        if (!node.matches && !node.querySelector) return false;
+        
+        // Check if it's an email row or contains email rows
+        const emailIndicators = [
+            'tr.zA', 'tr[jsmodel]', 'tr[role="row"]',
+            '[data-thread-id]', '[data-thread-perm-id]',
+            '.yW', '.bog', '.xY'
+        ];
+
+        return emailIndicators.some(selector => {
+            try {
+                return node.matches?.(selector) || node.querySelector?.(selector);
+            } catch (e) {
+                return false;
+            }
+        });
+    }
+
+    _debouncedRefresh() {
+        if (this.debounceTimeout) {
+            clearTimeout(this.debounceTimeout);
+        }
+        
+        this.debounceTimeout = setTimeout(() => {
+            if (this.isEnabled && !this.isProcessing) {
+                this.groupEmailsByDate();
+            }
+        }, 100); // Much shorter delay for smoothness
+    }
+
+    _findMessageList() {
+        // Try multiple selectors in order of preference
+        const possibleSelectors = [
+            'div[role="main"] table tbody',
+            '[role="main"] tbody',
+            'table.F tbody',
+            '.BltHke tbody',
+            'tbody'
+        ];
+
+        for (const selector of possibleSelectors) {
+            const element = document.querySelector(selector);
+            if (element && element.querySelectorAll('tr').length > 0) {
+                return element;
+            }
+        }
+        return null;
     }
 
     _getGmailEmailRows() {
-        // Debug: Log current URL and wait state
-        console.log("Velocitas: Current URL:", window.location.href);
-        console.log("Velocitas: Document ready state:", document.readyState);
-        
-        // Try multiple selectors for Gmail email rows as Gmail's structure can vary
-        const possibleSelectors = [
-            // New Gmail interface selectors
-            'tr[jsmodel]', // Gmail often uses jsmodel attribute on email rows  
-            'tr[role="row"]', // ARIA role for table rows
-            'tr.zA', // Classic Gmail selector
-            'div[role="main"] tr.zA',
-            '[role="main"] tr[jsmodel]',
-            '[data-thread-perm-id]', // Gmail thread identifier
-            'tr[data-thread-id]', // Alternative thread identifier
-            
-            // Broader selectors for debugging
-            '[role="main"] tbody tr',
-            '[role="main"] tr',
-            'table.F tr.zA',
-            '.BltHke tr.zA',
-            'tr.btb', // Alternative Gmail row class
-            'tr.Wg', // Another possible Gmail row class
-            
-            // Very broad selectors as fallback
-            'tbody tr',
-            'table tr'
-        ];
-        
-        // Debug: Show what's available in the main area
-        const mainArea = document.querySelector('[role="main"]');
-        if (mainArea) {
-            console.log("Velocitas: Main area found:", mainArea);
-            console.log("Velocitas: Main area HTML preview:", mainArea.innerHTML.substring(0, 500));
-            
-            // Look for any table rows in main area
-            const allTrs = mainArea.querySelectorAll('tr');
-            console.log(`Velocitas: Found ${allTrs.length} total <tr> elements in main area`);
-            if (allTrs.length > 0) {
-                console.log("Velocitas: First TR element:", allTrs[0]);
-                console.log("Velocitas: First TR classes:", allTrs[0].className);
-                console.log("Velocitas: First TR attributes:", Array.from(allTrs[0].attributes).map(attr => `${attr.name}="${attr.value}"`));
-            }
-        } else {
-            console.warn("Velocitas: No main area found");
-            // Try to find any container that might hold emails
-            const containers = document.querySelectorAll('.nH, .aeF, [role="tabpanel"]');
-            console.log(`Velocitas: Found ${containers.length} potential containers`);
+        const messageList = this._findMessageList();
+        if (!messageList) {
+            return document.querySelectorAll('');
         }
-        
-        for (const selector of possibleSelectors) {
-            try {
-                const rows = document.querySelectorAll(selector);
-                if (rows.length > 0) {
-                    console.log(`Velocitas: Found ${rows.length} email rows with selector: ${selector}`);
-                    
-                    // Additional validation - check if these look like email rows
-                    const firstRow = rows[0];
-                    const hasEmailIndicators = firstRow.querySelector('span[email]') || 
-                                             firstRow.querySelector('[data-hovercard-id]') ||
-                                             firstRow.querySelector('.yW') || // Gmail sender name class
-                                             firstRow.querySelector('.bog') || // Gmail subject class
-                                             firstRow.textContent.includes('@') ||
-                                             firstRow.querySelector('td.xY'); // Gmail date column
-                    
-                    if (hasEmailIndicators) {
-                        console.log("Velocitas: Rows appear to be email rows (validation passed)");
-                        return rows;
-                    } else {
-                        console.log("Velocitas: Rows found but don't appear to be email rows, continuing search...");
-                    }
-                }
-            } catch (error) {
-                console.warn(`Velocitas: Error with email row selector ${selector}:`, error);
+
+        // Get all table rows and filter for email rows
+        const allRows = messageList.querySelectorAll('tr');
+        const emailRows = [];
+
+        for (const row of allRows) {
+            // Skip our own headers
+            if (row.classList.contains('velocitas-date-group-header')) {
+                continue;
+            }
+
+            // Check if this looks like an email row
+            const hasEmailIndicators = 
+                row.querySelector('[data-thread-id]') ||
+                row.querySelector('[data-thread-perm-id]') ||
+                row.querySelector('.yW') || // sender
+                row.querySelector('.bog') || // subject
+                row.querySelector('.xY') || // date
+                row.querySelector('span[email]') ||
+                row.querySelector('[title*=":"]') || // time format
+                row.classList.contains('zA') ||
+                row.hasAttribute('jsmodel');
+
+            if (hasEmailIndicators) {
+                emailRows.push(row);
             }
         }
-        
-        console.warn("Velocitas: No email rows found with any selector");
-        
-        // Final debug attempt - look for any elements that might contain email data
-        const potentialEmailElements = document.querySelectorAll('[data-thread-id], [data-legacy-thread-id], .zA, .yW, .bog');
-        console.log(`Velocitas: Found ${potentialEmailElements.length} potential email-related elements`);
-        if (potentialEmailElements.length > 0) {
-            console.log("Velocitas: Sample email element:", potentialEmailElements[0]);
-        }
-        
-        return document.querySelectorAll(''); // Return empty NodeList
+
+        return emailRows;
     }
 
     _getGmailEmailContainer(emailRows) {
         if (!emailRows || !emailRows.length) return null;
-        
-        // Try to find the tbody or table container
-        let container = emailRows[0].closest('tbody');
-        if (!container) {
-            container = emailRows[0].closest('table');
-        }
-        if (!container) {
-            container = emailRows[0].parentElement;
-        }
-        
-        if (container) {
-            console.log("Velocitas: Found email container:", container.tagName, container.className);
-        }
-        
-        return container;
+        return emailRows[0].closest('tbody') || emailRows[0].parentElement;
     }
 
-
     groupEmailsByDate() {
-        console.log("Velocitas: Attempting to group emails by date.");
-        this._ungroupEmailsByDate(); // Clear existing groups first
+        if (this.isProcessing) return;
+        this.isProcessing = true;
 
-        const emailRows = this._getGmailEmailRows();
-        if (!emailRows.length) {
-            console.log("Velocitas: No email rows found to group.");
+        try {
+            // Clear existing headers first
+            this._ungroupEmailsByDate();
+
+            const emailRows = this._getGmailEmailRows();
+            if (!emailRows.length) {
+                return;
+            }
+
+            const emailContainer = this._getGmailEmailContainer(emailRows);
+            if (!emailContainer) {
+                return;
+            }
+
+            // Process all emails and collect header insertion points BEFORE making any DOM changes
+            const insertionPlan = [];
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const yesterday = new Date(today);
+            yesterday.setDate(today.getDate() - 1);
+            const last7DaysThreshold = new Date(today);
+            last7DaysThreshold.setDate(today.getDate() - 6);
+            const last30DaysThreshold = new Date(today);
+            last30DaysThreshold.setDate(today.getDate() - 29);
+
+            let currentGroup = null;
+
+            emailRows.forEach(row => {
+                const dateElement = this._findDateElement(row);
+                if (!dateElement) return;
+
+                const emailDate = this._parseEmailDate(dateElement.title || dateElement.textContent, now);
+                if (!emailDate) return;
+
+                const emailDateDayOnly = new Date(emailDate.getFullYear(), emailDate.getMonth(), emailDate.getDate());
+                const category = this._categorizeDate(emailDateDayOnly, today, yesterday, last7DaysThreshold, last30DaysThreshold);
+
+                if (category !== currentGroup) {
+                    insertionPlan.push({ category, row });
+                    currentGroup = category;
+                }
+            });
+
+            // Now insert all headers in reverse order to avoid DOM shifting issues
+            for (let i = insertionPlan.length - 1; i >= 0; i--) {
+                const { category, row } = insertionPlan[i];
+                this._insertDateHeaderSafely(category, row, emailContainer);
+            }
+        } finally {
+            this.isProcessing = false;
+        }
+    }
+
+    _insertDateHeaderSafely(category, row, emailContainer) {
+        const headerId = `velocitas-group-${category.replace(/\s+/g, '-')}`;
+        
+        // Remove any existing header with this ID
+        const existingHeader = document.getElementById(headerId);
+        if (existingHeader) {
+            existingHeader.remove();
+        }
+
+        // Create header with minimal DOM manipulation
+        const headerElement = document.createElement('tr');
+        headerElement.id = headerId;
+        headerElement.classList.add('velocitas-date-group-header');
+        
+        // Use a single cell with colspan to avoid complex cell structure
+        const headerCell = document.createElement('td');
+        const colCount = row.cells.length > 0 ? row.cells.length : 6;
+        headerCell.colSpan = colCount;
+        headerCell.textContent = category;
+        
+        // Apply all styles inline to avoid CSS timing issues
+        headerElement.style.cssText = `
+            pointer-events: none !important;
+            user-select: none !important;
+            position: relative !important;
+            z-index: 1 !important;
+        `;
+        
+        headerCell.style.cssText = `
+            background-color: #FFFACD !important;
+            color: #4A4A4A !important;
+            padding: 8px 18px !important;
+            font-weight: bold !important;
+            font-size: 13px !important;
+            border-top: 1px solid #FFEE58 !important;
+            border-bottom: 1px solid #FFEE58 !important;
+            pointer-events: none !important;
+            user-select: none !important;
+        `;
+        
+        headerElement.appendChild(headerCell);
+        
+        try {
+            // Insert immediately before the email row
+            emailContainer.insertBefore(headerElement, row);
+        } catch (error) {
+            console.warn("Velocitas: Error inserting header:", error);
+        }
+    }
+
+    _findDateElement(row) {
+        const dateSelectors = [
+            'span[title*=":"]',
+            'td.xY span',
+            '.xW span[title]',
+            '.xY span[title]',
+            'td span[title]',
+            'span[title]'
+        ];
+
+        for (const selector of dateSelectors) {
+            const element = row.querySelector(selector);
+            if (element && (element.title || element.textContent)) {
+                return element;
+            }
+        }
+        return null;
+    }
+
+    _parseEmailDate(dateStr, now) {
+        if (!dateStr) return null;
+
+        let emailDate = new Date(dateStr);
+        if (!isNaN(emailDate.getTime())) {
+            return emailDate;
+        }
+
+        // Try parsing relative dates
+        const simpleDateMatch = dateStr.match(/^([a-zA-Z]{3})\s(\d{1,2})$/);
+        if (simpleDateMatch) {
+            emailDate = new Date(`${simpleDateMatch[0]}, ${now.getFullYear()}`);
+            if (!isNaN(emailDate.getTime())) {
+                return emailDate;
+            }
+        }
+
+        return null;
+    }
+
+    _categorizeDate(emailDateDayOnly, today, yesterday, last7DaysThreshold, last30DaysThreshold) {
+        const todayTime = today.getTime();
+        const yesterdayTime = yesterday.getTime();
+        const emailTime = emailDateDayOnly.getTime();
+        
+        // Calculate time differences in days
+        const daysDiff = Math.floor((todayTime - emailTime) / (1000 * 60 * 60 * 24));
+        
+        if (emailTime === todayTime) {
+            return "Today";
+        } else if (emailTime === yesterdayTime) {
+            return "Yesterday";
+        } else if (daysDiff === 2) {
+            return "2 days ago";
+        } else if (daysDiff === 3) {
+            return "3 days ago";
+        } else if (daysDiff === 4) {
+            return "4 days ago";
+        } else if (daysDiff === 5) {
+            return "5 days ago";
+        } else if (daysDiff === 6) {
+            return "6 days ago";
+        } else if (daysDiff >= 7 && daysDiff <= 13) {
+            return "A week ago";
+        } else if (daysDiff >= 14 && daysDiff <= 20) {
+            return "2 weeks ago";
+        } else if (daysDiff >= 21 && daysDiff <= 27) {
+            return "3 weeks ago";
+        } else if (daysDiff >= 28 && daysDiff <= 59) {
+            return "A month ago";
+        } else if (daysDiff >= 60 && daysDiff <= 89) {
+            return "2 months ago";
+        } else if (daysDiff >= 90 && daysDiff <= 119) {
+            return "3 months ago";
+        } else if (daysDiff >= 120 && daysDiff <= 179) {
+            return "4-6 months ago";
+        } else if (daysDiff >= 180 && daysDiff <= 364) {
+            return "6 months ago";
+        } else if (daysDiff >= 365 && daysDiff <= 729) {
+            return "A year ago";
+        } else {
+            return "A while ago";
+        }
+    }
+
+    _insertDateHeader(category, row, emailContainer) {
+        const headerId = `velocitas-group-${category.replace(/\s+/g, '-')}`;
+        
+        const existingHeader = document.getElementById(headerId);
+        if (existingHeader && existingHeader.nextElementSibling === row) {
             return;
         }
 
-        const emailContainer = this._getGmailEmailContainer(emailRows);
-        if (!emailContainer) {
-            console.warn("Velocitas: Email container not found.");
-            return;
+        if (existingHeader) {
+            existingHeader.remove();
         }
 
-        const now = new Date();
-        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        const yesterday = new Date(today);
-        yesterday.setDate(today.getDate() - 1);
-        const last7DaysThreshold = new Date(today);
-        last7DaysThreshold.setDate(today.getDate() - 6);
-        const last30DaysThreshold = new Date(today);
-        last30DaysThreshold.setDate(today.getDate() - 29);
-
-        let currentGroup = null;
-
-        emailRows.forEach(row => {
-            // Try multiple selectors for the date element
-            const dateSelectors = [
-                'td.xW.xY span[title]',
-                'span[title*=":"]', // Look for spans with time in title
-                '.xW span[title]',
-                '.xY span[title]',
-                'td span[title]'
-            ];
+        const headerElement = document.createElement('tr');
+        headerElement.id = headerId;
+        headerElement.classList.add('velocitas-date-group-header');
+        
+        // Create individual cells instead of one spanning cell
+        const colCount = row.cells.length > 0 ? row.cells.length : 6;
+        
+        for (let i = 0; i < colCount; i++) {
+            const cell = document.createElement('td');
             
-            let dateElement = null;
-            for (const selector of dateSelectors) {
-                dateElement = row.querySelector(selector);
-                if (dateElement && dateElement.title) {
-                    break;
-                }
-            }
-            
-            if (!dateElement || !dateElement.title) {
-                console.warn("Velocitas: Could not find date element for row:", row);
-                return; 
-            }
-
-            const emailDateStr = dateElement.title;
-            let emailDate = new Date(emailDateStr);
-
-            if (isNaN(emailDate.getTime())) {
-                // Fallback for relative dates
-                const simpleDateMatch = emailDateStr.match(/^([a-zA-Z]{3})\s(\d{1,2})$/);
-                if (simpleDateMatch) {
-                    emailDate = new Date(`${simpleDateMatch[0]}, ${now.getFullYear()}`);
-                }
-                if (isNaN(emailDate.getTime())) {
-                    console.warn("Velocitas: Could not parse date:", emailDateStr);
-                    return;
-                }
-            }
-            
-            const emailDateDayOnly = new Date(emailDate.getFullYear(), emailDate.getMonth(), emailDate.getDate());
-
-            let category;
-            if (emailDateDayOnly.getTime() === today.getTime()) {
-                category = "Today";
-            } else if (emailDateDayOnly.getTime() === yesterday.getTime()) {
-                category = "Yesterday";
-            } else if (emailDateDayOnly >= last7DaysThreshold) {
-                category = "Last 7 days";
-            } else if (emailDateDayOnly >= last30DaysThreshold) {
-                category = "Last 30 days";
-            } else {
-                category = "Older";
-            }
-
-            if (category !== currentGroup) {
-                const headerId = `velocitas-group-${category.replace(/\s+/g, '-')}`;
-                
-                // Create header element
-                const headerElement = document.createElement('tr');
-                headerElement.id = headerId;
-                headerElement.classList.add('velocitas-date-group-header');
-                
-                const headerCell = document.createElement('td');
-                const colCount = row.cells.length > 0 ? row.cells.length : 6;
-                headerCell.colSpan = colCount;
-                headerCell.textContent = category;
-                headerCell.style.cssText = `
+            if (i === 0) {
+                // Put the date text only in the first cell
+                cell.textContent = category;
+                cell.style.cssText = `
                     background-color: #FFFACD !important;
                     color: #4A4A4A !important;
                     padding: 8px 18px !important;
@@ -286,157 +446,47 @@ class VelocitasAI {
                     font-size: 13px !important;
                     border-top: 1px solid #FFEE58 !important;
                     border-bottom: 1px solid #FFEE58 !important;
+                    pointer-events: none !important;
+                    user-select: none !important;
                 `;
-                
-                headerElement.appendChild(headerCell);
-                
-                try {
-                    emailContainer.insertBefore(headerElement, row);
-                    console.log(`Velocitas: Added header for ${category}`);
-                } catch (error) {
-                    console.error("Velocitas: Error inserting header:", error);
-                }
-                
-                currentGroup = category;
+            } else {
+                // Empty cells for other columns
+                cell.innerHTML = '&nbsp;';
+                cell.style.cssText = `
+                    background-color: #FFFACD !important;
+                    border-top: 1px solid #FFEE58 !important;
+                    border-bottom: 1px solid #FFEE58 !important;
+                    pointer-events: none !important;
+                    user-select: none !important;
+                    padding: 8px 0 !important;
+                `;
             }
-        });
-        console.log("Velocitas: Email grouping completed.");
+            
+            headerElement.appendChild(cell);
+        }
+        
+        // Make entire row non-interactive
+        headerElement.style.pointerEvents = 'none';
+        headerElement.style.userSelect = 'none';
+        
+        try {
+            emailContainer.insertBefore(headerElement, row);
+        } catch (error) {
+            console.warn("Velocitas: Error inserting header:", error);
+        }
     }
 
     _ungroupEmailsByDate() {
-        // console.log("Velocitas: Removing date groups.");
         const headers = document.querySelectorAll('.velocitas-date-group-header');
         headers.forEach(header => header.remove());
-    }
-
-    _setupMutationObserver() {
-        // Clear any existing observer
-        if (this.observer) {
-            this.observer.disconnect();
-            this.observer = null; 
-        }
-        if (this.observerRetryTimeout) {
-            clearTimeout(this.observerRetryTimeout);
-            this.observerRetryTimeout = null;
-        }
-
-        // Wait a bit for Gmail to fully load
-        setTimeout(() => {
-            this._attemptObserverSetup();
-        }, 1000);
-    }
-
-    _attemptObserverSetup() {
-        const possibleSelectors = [
-            'div[role="main"]',
-            '[role="main"]',
-            '.nH.bkK', // Gmail main container
-            '.nH', // Gmail container
-            'body'
-        ];
-        
-        let targetNode = null;
-        for (const selector of possibleSelectors) {
-            try {
-                targetNode = document.querySelector(selector);
-                if (targetNode) {
-                    console.log(`Velocitas: Found observer target with selector: ${selector}`);
-                    break;
-                }
-            } catch (error) {
-                console.warn(`Velocitas: Error with observer selector ${selector}:`, error);
-            }
-        }
-        
-        if (!targetNode) {
-            this.observerRetryCount++;
-            if (this.observerRetryCount <= this.observerMaxRetries) {
-                console.warn(`Velocitas: Retrying observer setup (${this.observerRetryCount}/${this.observerMaxRetries})...`);
-                this.observerRetryTimeout = setTimeout(() => {
-                    if (this.isEnabled) {
-                        this._attemptObserverSetup();
-                    }
-                }, 2000 * this.observerRetryCount);
-            } else {
-                console.error("Velocitas: Failed to set up observer after max retries.");
-            }
-            return;
-        }
-
-        // Reset retry count
-        this.observerRetryCount = 0;
-
-        const config = { 
-            childList: true, 
-            subtree: true, // Watch deeper changes
-            attributes: false 
-        };
-
-        const callback = (mutationsList) => {
-            if (!this.isEnabled) return;
-
-            let shouldRegroup = false;
-            for (const mutation of mutationsList) {
-                if (mutation.type === 'childList') {
-                    // Check if any email rows were added or removed
-                    const hasEmailChanges = Array.from(mutation.addedNodes).some(node => 
-                        node.nodeType === Node.ELEMENT_NODE && 
-                        (node.matches && node.matches('tr.zA') || 
-                         node.querySelector && node.querySelector('tr.zA'))
-                    ) || Array.from(mutation.removedNodes).some(node => 
-                        node.nodeType === Node.ELEMENT_NODE && 
-                        (node.matches && node.matches('tr.zA') || 
-                         node.classList && node.classList.contains('velocitas-date-group-header'))
-                    );
-                    
-                    if (hasEmailChanges) {
-                        shouldRegroup = true;
-                        break;
-                    }
-                }
-            }
-            
-            if (shouldRegroup) {
-                this.debouncedGroupEmails();
-            }
-        };
-
-        try {
-            this.observer = new MutationObserver(callback);
-            this.observer.observe(targetNode, config);
-            console.log("Velocitas: MutationObserver successfully set up");
-
-            // Initialize debounced function
-            if (!this.debouncedGroupEmails) {
-                this.debouncedGroupEmails = () => {
-                    clearTimeout(this.debounceTimeout);
-                    this.debounceTimeout = setTimeout(() => {
-                        if (this.isEnabled) {
-                            this.groupEmailsByDate();
-                        }
-                    }, 1000);
-                };
-            }
-        } catch (error) {
-            console.error("Velocitas: Error creating MutationObserver:", error);
-            // Retry setup
-            this.observerRetryCount++;
-            if (this.observerRetryCount <= this.observerMaxRetries) {
-                this.observerRetryTimeout = setTimeout(() => {
-                    if (this.isEnabled) {
-                        this._attemptObserverSetup();
-                    }
-                }, 2000 * this.observerRetryCount);
-            }
-        }
     }
 }
 
 // Initialize extension logic when on Gmail
 if (window.location.hostname === 'mail.google.com') {
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => new VelocitasAI());
-  } else {
-    new VelocitasAI();
-  }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => new VelocitasAI());
+    } else {
+        new VelocitasAI();
+    }
 }
