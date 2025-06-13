@@ -172,3 +172,13 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+#Custon files
+*.json
+database
+logfile
+*.txt
+prompts.py
+
+node_modules/
+Zero/

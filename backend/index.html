@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gmail</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Google Sans', Roboto, RobotoDraft, Helvetica, Arial, sans-serif;
+            background-color: #ffffff;
+            color: #202124;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        
+        /* Gmail Header */
+        .gmail-header {
+            height: 64px;
+            background: #fff;
+            border-bottom: 1px solid #dadce0;
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        
+        .gmail-logo {
+            font-size: 22px;
+            font-weight: 400;
+            color: #5f6368;
+            margin-right: 24px;
+        }
+        
+        .search-container {
+            flex: 1;
+            max-width: 720px;
+            margin: 0 24px;
+        }
+        
+        .search-box {
+            width: 100%;
+            height: 48px;
+            background: #f1f3f4;
+            border: none;
+            border-radius: 24px;
+            padding: 0 16px 0 48px;
+            font-size: 16px;
+            outline: none;
+            transition: background-color 0.2s, box-shadow 0.2s;
+            position: relative;
+        }
+        
+        .search-box:focus {
+            background: #fff;
+            box-shadow: 0 1px 6px rgba(32,33,36,.28);
+        }
+        
+        .search-icon {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #5f6368;
+            font-size: 20px;
+        }
+        
+        /* Main Layout */
+        .gmail-container {
+            display: flex;
+            height: calc(100vh - 64px);
+        }
+        
+        /* Sidebar */
+        .gmail-sidebar {
+            width: 256px;
+            background: #fff;
+            border-right: 1px solid #dadce0;
+            overflow-y: auto;
+            padding: 8px 0;
+        }
+        
+        .compose-button {
+            margin: 16px;
+            height: 56px;
+            background: #c2e7ff;
+            border: none;
+            border-radius: 28px;
+            font-size: 14px;
+            font-weight: 500;
+            color: #041e49;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            padding: 0 24px;
+            transition: all 0.2s;
+            box-shadow: 0 1px 2px 0 rgba(60,64,67,.30), 0 1px 3px 1px rgba(60,64,67,.15);
+        }
+        
+        .compose-button:hover {
+            background: #a8c7fa;
+            box-shadow: 0 1px 3px 0 rgba(60,64,67,.30), 0 4px 8px 3px rgba(60,64,67,.15);
+        }
+        
+        .sidebar-item {
+            height: 32px;
+            margin: 0 8px;
+            padding: 0 12px;
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            font-size: 14px;
+            color: #202124;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        
+        .sidebar-item:hover {
+            background: #f1f3f4;
+        }
+        
+        .sidebar-item.active {
+            background: #fce8e6;
+            color: #d93025;
+            font-weight: 500;
+        }
+        
+        .sidebar-icon {
+            width: 20px;
+            height: 20px;
+            margin-right: 12px;
+            color: #5f6368;
+        }
+        
+        .sidebar-item.active .sidebar-icon {
+            color: #d93025;
+        }
+        
+        /* Email List */
+        .email-list-container {
+            flex: 1;
+            background: #fff;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .toolbar {
+            height: 48px;
+            border-bottom: 1px solid #dadce0;
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            background: #fff;
+            position: sticky;
+            top: 0;
+            z-index: 50;
+        }
+        
+        .toolbar-section {
+            display: flex;
+            align-items: center;
+        }
+        
+        .toolbar-button {
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: none;
+            border-radius: 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #5f6368;
+            transition: background-color 0.2s;
+            margin: 0 2px;
+        }
+        
+        .toolbar-button:hover {
+            background: #f1f3f4;
+        }
+        
+        .email-list {
+            flex: 1;
+            overflow-y: auto;
+        }
+        
+        .email-item {
+            height: 40px;
+            border-bottom: 1px solid #f0f0f0;
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            cursor: pointer;
+            transition: background-color 0.1s;
+            position: relative;
+        }
+        
+        .email-item:hover {
+            box-shadow: inset 1px 0 0 #dadce0, inset -1px 0 0 #dadce0, 0 1px 2px 0 rgba(60,64,67,.30), 0 1px 3px 1px rgba(60,64,67,.15);
+            z-index: 10;
+        }
+        
+        .email-item.selected {
+            background: #fce8e6;
+            border-bottom-color: #fce8e6;
+        }
+        
+        .email-item.unread {
+            font-weight: 500;
+        }
+        
+        .email-checkbox {
+            width: 20px;
+            height: 20px;
+            margin-right: 12px;
+        }
+        
+        .email-star {
+            width: 16px;
+            height: 16px;
+            margin-right: 8px;
+            cursor: pointer;
+            color: #5f6368;
+        }
+        
+        .email-star.starred {
+            color: #fbbc04;
+        }
+        
+        .email-sender {
+            width: 180px;
+            font-size: 14px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .email-subject {
+            flex: 1;
+            font-size: 14px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-right: 16px;
+        }
+        
+        .email-snippet {
+            color: #5f6368;
+            margin-left: 4px;
+        }
+        
+        .email-date {
+            font-size: 12px;
+            color: #5f6368;
+            width: 80px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+        
+        /* Email Viewer */
+        .email-viewer {
+            width: 50%;
+            background: #fff;
+            border-left: 1px solid #dadce0;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+        
+        .email-header {
+            padding: 24px 24px 16px;
+            border-bottom: 1px solid #dadce0;
+            background: #fff;
+            position: sticky;
+            top: 0;
+            z-index: 40;
+        }
+        
+        .email-subject-line {
+            font-size: 22px;
+            font-weight: 400;
+            color: #202124;
+            margin-bottom: 8px;
+            line-height: 28px;
+        }
+        
+        .email-labels {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 12px;
+        }
+        
+        .email-label {
+            background: #e8f0fe;
+            color: #1a73e8;
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-weight: 500;
+        }
+        
+        .email-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .sender-info {
+            display: flex;
+            align-items: center;
+        }
+        
+        .sender-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: #1a73e8;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 500;
+            margin-right: 12px;
+            font-size: 14px;
+        }
+        
+        .sender-details {
+            flex: 1;
+        }
+        
+        .sender-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: #202124;
+        }
+        
+        .sender-email {
+            font-size: 12px;
+            color: #5f6368;
+        }
+        
+        .email-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .action-button {
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: none;
+            border-radius: 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #5f6368;
+            transition: background-color 0.2s;
+        }
+        
+        .action-button:hover {
+            background: #f1f3f4;
+        }
+        
+        .email-content {
+            flex: 1;
+            padding: 24px;
+            overflow-y: auto;
+            background: #fff;
+        }
+        
+        .email-body {
+            font-size: 14px;
+            line-height: 1.6;
+            color: #202124;
+            font-family: Arial, sans-serif;
+        }
+        
+        .email-body p {
+            margin: 0 0 16px 0;
+        }
+        
+        .email-body a {
+            color: #1a73e8;
+            text-decoration: none;
+        }
+        
+        .email-body a:hover {
+            text-decoration: underline;
+        }
+        
+        .email-body blockquote {
+            border-left: 4px solid #dadce0;
+            margin: 16px 0;
+            padding-left: 16px;
+            color: #5f6368;
+        }
+        
+        .attachments {
+            margin-top: 20px;
+            padding-top: 16px;
+            border-top: 1px solid #dadce0;
+        }
+        
+        .attachment {
+            display: inline-flex;
+            align-items: center;
+            background: #f8f9fa;
+            border: 1px solid #dadce0;
+            padding: 8px 12px;
+            margin: 4px 8px 4px 0;
+            border-radius: 8px;
+            text-decoration: none;
+            color: #1a73e8;
+            font-size: 13px;
+            transition: background-color 0.2s;
+        }
+        
+        .attachment:hover {
+            background: #e8f0fe;
+        }
+        
+        .attachment-icon {
+            margin-right: 8px;
+            font-size: 16px;
+        }
+        
+        /* Thread styling */
+        .thread-container {
+            background: #fff;
+        }
+        
+        .thread-message {
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        .thread-message:last-child {
+            border-bottom: none;
+        }
+        
+        .thread-collapsed {
+            padding: 12px 24px;
+            cursor: pointer;
+            background: #fafafa;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        .thread-collapsed:hover {
+            background: #f1f3f4;
+        }
+        
+        .thread-collapsed .sender-name {
+            display: inline;
+            margin-right: 8px;
+        }
+        
+        .thread-collapsed .email-snippet {
+            display: inline;
+            color: #5f6368;
+        }
+        
+        .thread-collapsed .email-date {
+            float: right;
+        }
+        
+        /* Loading states */
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 48px 24px;
+            color: #5f6368;
+            font-size: 14px;
+        }
+        
+        .error {
+            color: #d93025;
+            background: #fce8e6;
+            padding: 16px 24px;
+            border-radius: 8px;
+            margin: 16px;
+            font-size: 14px;
+        }
+        
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .email-viewer {
+                width: 60%;
+            }
+        }
+        
+        @media (max-width: 900px) {
+            .gmail-container {
+                flex-direction: column;
+            }
+            
+            .gmail-sidebar {
+                width: 100%;
+                height: auto;
+                border-right: none;
+                border-bottom: 1px solid #dadce0;
+            }
+            
+            .email-list-container {
+                width: 100%;
+            }
+            
+            .email-viewer {
+                width: 100%;
+                border-left: none;
+                border-top: 1px solid #dadce0;
+            }
+        }
+        
+        /* Dark mode support */
+        @media (prefers-color-scheme: dark) {
+            body {
+                background-color: #202124;
+                color: #e8eaed;
+            }
+            
+            .gmail-header {
+                background: #2d2e30;
+                border-bottom-color: #5f6368;
+            }
+            
+            .search-box {
+                background: #303134;
+                color: #e8eaed;
+            }
+            
+            .search-box:focus {
+                background: #303134;
+            }
+            
+            .gmail-sidebar,
+            .email-list-container,
+            .email-viewer {
+                background: #202124;
+                border-color: #5f6368;
+            }
+            
+            .email-item:hover {
+                background: #303134;
+            }
+            
+            .sidebar-item:hover {
+                background: #303134;
+            }
+            
+            .toolbar-button:hover {
+                background: #303134;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Gmail Header -->
+    <div class="gmail-header">
+        <div class="gmail-logo">Gmail</div>
+        <div class="search-container">
+            <div style="position: relative;">
+                <div class="search-icon">🔍</div>
+                <input type="text" class="search-box" placeholder="Search mail" id="searchBox">
+            </div>
+        </div>
+        <div style="width: 48px; height: 48px; border-radius: 50%; background: #1a73e8; color: white; display: flex; align-items: center; justify-content: center; font-weight: 500;">U</div>
+    </div>
+
+    <div class="gmail-container">
+        <!-- Sidebar -->
+        <div class="gmail-sidebar">
+            <button class="compose-button">
+                <span style="margin-right: 12px;">✏️</span>
+                Compose
+            </button>
+            
+            <div class="sidebar-item active">
+                <div class="sidebar-icon">📥</div>
+                Inbox
+            </div>
+            <div class="sidebar-item">
+                <div class="sidebar-icon">⭐</div>
+                Starred
+            </div>
+            <div class="sidebar-item">
+                <div class="sidebar-icon">📤</div>
+                Sent
+            </div>
+            <div class="sidebar-item">
+                <div class="sidebar-icon">📝</div>
+                Drafts
+            </div>
+        </div>
+
+        <!-- Email List -->
+        <div class="email-list-container">
+            <div class="toolbar">
+                <div class="toolbar-section">
+                    <button class="toolbar-button" title="Select">☑️</button>
+                    <button class="toolbar-button" title="Archive">📦</button>
+                    <button class="toolbar-button" title="Delete">🗑️</button>
+                    <button class="toolbar-button" title="Mark as spam">⚠️</button>
+                </div>
+            </div>
+            
+            <div class="email-list" id="emailList">
+                <div class="loading">Loading emails...</div>
+            </div>
+        </div>
+
+        <!-- Email Viewer -->
+        <div class="email-viewer">
+            <div id="emailContent">
+                <div class="loading">Select an email to view</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8002'; // Updated to new FastAPI server
+        let currentEmails = [];
+        let selectedEmailId = null;
+        let searchTimeout = null;
+
+        // Function to get auth headers
+        function getAuthHeaders() {
+            const token = localStorage.getItem('access_token');
+            return {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            };
+        }
+
+        // Function to check if user is authenticated
+        function checkAuth() {
+            const token = localStorage.getItem('access_token');
+            if (!token) {
+                showAuthPrompt();
+                return false;
+            }
+            return true;
+        }
+
+        // Show authentication prompt
+        function showAuthPrompt() {
+            document.getElementById('emailList').innerHTML = `
+                <div class="error">
+                    <h3>Authentication Required</h3>
+                    <p>Please log in to view your emails.</p>
+                    <button onclick="redirectToAuth()" style="
+                        background: #1a73e8; 
+                        color: white; 
+                        border: none; 
+                        padding: 10px 20px; 
+                        border-radius: 4px; 
+                        cursor: pointer;
+                        margin-top: 10px;
+                    ">Go to Login</button>
+                </div>
+            `;
+        }
+
+        // Redirect to authentication
+        function redirectToAuth() {
+            window.location.href = 'http://localhost:3000'; // Your frontend URL
+        }
+
+        // Load emails on page load
+        if (checkAuth()) {
+            loadEmails();
+        }
+
+        // Search functionality with debouncing
+        document.getElementById('searchBox').addEventListener('input', (e) => {
+            if (!checkAuth()) return;
+            
+            const query = e.target.value.trim();
+            
+            // Clear previous timeout
+            if (searchTimeout) {
+                clearTimeout(searchTimeout);
+            }
+            
+            // Debounce search to avoid too many API calls
+            searchTimeout = setTimeout(() => {
+                loadEmails(query);
+            }, 300);
+        });
+
+        async function loadEmails(query = '') {
+            if (!checkAuth()) return;
+            
+            const listContainer = document.getElementById('emailList');
+            listContainer.innerHTML = '<div class="loading">Loading emails...</div>';
+            
+            try {
+                const url = query 
+                    ? `${API_BASE}/emails?q=${encodeURIComponent(query)}&max_results=50`
+                    : `${API_BASE}/emails?max_results=50`;
+                    
+                const response = await fetch(url, {
+                    headers: getAuthHeaders()
+                });
+                
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        // Token expired, try to refresh
+                        const refreshToken = localStorage.getItem('refresh_token');
+                        if (refreshToken && await refreshAuthToken(refreshToken)) {
+                            // Retry with new token
+                            const retryResponse = await fetch(url, {
+                                headers: getAuthHeaders()
+                            });
+                            if (retryResponse.ok) {
+                                const data = await retryResponse.json();
+                                currentEmails = data.emails || [];
+                                renderEmailList(currentEmails);
+                                return;
+                            }
+                        }
+                        // Refresh failed, redirect to auth
+                        clearTokens();
+                        showAuthPrompt();
+                        return;
+                    }
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                currentEmails = data.emails || [];
+                renderEmailList(currentEmails);
+                
+                if (currentEmails.length === 0) {
+                    listContainer.innerHTML = '<div class="loading">No emails found</div>';
+                }
+                
+            } catch (error) {
+                console.error('Error loading emails:', error);
+                listContainer.innerHTML = `<div class="error">Error loading emails: ${error.message}</div>`;
+            }
+        }
+
+        // Refresh token function
+        async function refreshAuthToken(refreshToken) {
+            try {
+                const response = await fetch(`${API_BASE}/auth/refresh`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ refresh_token: refreshToken })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    localStorage.setItem('access_token', data.access_token);
+                    localStorage.setItem('refresh_token', data.refresh_token);
+                    return true;
+                } else {
+                    return false;
+                }
+            } catch (error) {
+                console.error('Token refresh failed:', error);
+                return false;
+            }
+        }
+
+        // Clear tokens
+        function clearTokens() {
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('refresh_token');
+            localStorage.removeItem('user_data');
+        }
+
+        function renderEmailList(emails) {
+            const listContainer = document.getElementById('emailList');
+            
+            if (emails.length === 0) {
+                listContainer.innerHTML = '<div class="loading">No emails found</div>';
+                return;
+            }
+            
+            listContainer.innerHTML = emails.map(email => `
+                <div class="email-item ${!email.is_read ? 'unread' : ''}" onclick="selectEmail('${email.id}')">
+                    <input type="checkbox" class="email-checkbox">
+                    <div class="email-star ${email.is_starred ? 'starred' : ''}">⭐</div>
+                    <div class="email-sender">${escapeHtml(extractName(email.sender) || '(No sender)')}</div>
+                    <div class="email-subject">
+                        ${escapeHtml(email.subject || '(No Subject)')}
+                        <span class="email-snippet"> - ${escapeHtml(email.snippet || '')}</span>
+                    </div>
+                    <div class="email-date">${formatGmailDate(email.date)}</div>
+                </div>
+            `).join('');
+        }
+
+        function renderEmailContent(email, isExpanded) {
+            if (!isExpanded) {
+                return `
+                    <div class="thread-collapsed">
+                        <span class="sender-name">${extractName(email.sender)}</span>
+                        <span class="email-snippet">${escapeHtml(email.snippet || '')}</span>
+                        <span class="email-date">${formatGmailDate(email.internal_date)}</span>
+                    </div>
+                `;
+            }
+
+            const attachmentsHtml = email.attachments && email.attachments.length > 0 ? `
+                <div class="attachments">
+                    ${email.attachments.map(att => `
+                        <a href="${API_BASE}/attachments/${att.id}" class="attachment" download>
+                            <span class="attachment-icon">📎</span>
+                            ${escapeHtml(att.filename)} (${formatFileSize(att.size)})
+                        </a>
+                    `).join('')}
+                </div>
+            ` : '';
+
+            return `
+                <div class="email-header">
+                    <div class="email-subject-line">${escapeHtml(email.subject || '(No Subject)')}</div>
+                    <div class="email-labels">
+                        <!-- Labels would go here -->
+                    </div>
+                    <div class="email-meta">
+                        <div class="sender-info">
+                            <div class="sender-avatar">${getInitials(email.sender)}</div>
+                            <div class="sender-details">
+                                <div class="sender-name">${extractName(email.sender)}</div>
+                                <div class="sender-email">&lt;${extractEmail(email.sender)}&gt;</div>
+                            </div>
+                        </div>
+                        <div class="email-actions">
+                            <button class="action-button" title="Reply">↩️</button>
+                            <button class="action-button" title="Forward">➡️</button>
+                            <button class="action-button" title="Archive">📦</button>
+                            <button class="action-button" title="Delete">🗑️</button>
+                            <button class="action-button" title="More">⋯</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="email-content">
+                    <div class="email-body">
+                        ${email.html_body || escapeHtml(email.plain_body || email.snippet || 'No content').replace(/\n/g, '<br>')}
+                    </div>
+                    ${attachmentsHtml}
+                </div>
+            `;
+        }
+
+        async function selectEmail(emailId) {
+            // Update selected state
+            document.querySelectorAll('.email-item').forEach(item => {
+                item.classList.remove('selected');
+            });
+            event.target.closest('.email-item').classList.add('selected');
+            
+            selectedEmailId = emailId;
+            
+            const contentContainer = document.getElementById('emailContent');
+            contentContainer.innerHTML = '<div class="loading">Loading email...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/emails/${emailId}`, {
+                    headers: getAuthHeaders()
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const email = await response.json();
+                renderSingleEmail(email);
+            } catch (error) {
+                console.error('Error loading email:', error);
+                contentContainer.innerHTML = `<div class="error">Error loading email: ${error.message}</div>`;
+            }
+        }
+
+        function renderSingleEmail(email) {
+            const contentContainer = document.getElementById('emailContent');
+            contentContainer.innerHTML = `
+                <div class="thread-container">
+                    <div class="thread-message">
+                        ${renderEmailContent(email, true)}
+                    </div>
+                </div>
+            `;
+        }
+
+        function getInitials(sender) {
+            const name = extractName(sender);
+            if (!name) return 'U';
+            const words = name.split(' ');
+            if (words.length >= 2) {
+                return (words[0][0] + words[1][0]).toUpperCase();
+            }
+            return name[0].toUpperCase();
+        }
+
+        function formatGmailDate(dateString) {
+            const date = new Date(dateString);
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const emailDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+            
+            if (emailDate.getTime() === today.getTime()) {
+                return date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            } else if (emailDate.getFullYear() === now.getFullYear()) {
+                return date.toLocaleDateString([], {month: 'short', day: 'numeric'});
+            } else {
+                return date.toLocaleDateString([], {month: 'short', day: 'numeric', year: 'numeric'});
+            }
+        }
+
+        // ...existing code...
+    </script>
+</body>
+</html>
