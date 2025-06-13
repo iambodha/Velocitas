@@ -4,9 +4,8 @@ const nextConfig = {
   trailingSlash: true,
   images: {
     unoptimized: true
-  },
-  // Add this to ensure proper static export
-  distDir: 'out'
+  }
+  // Remove the distDir line - it's causing the conflict
 }
 
 module.exports = nextConfig
