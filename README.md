@@ -1,2 +1,0 @@
-# Velocitas
-creating productivity tools

@@ -1,0 +1,81 @@
+/* No custom styles - Gmail default appearance restored */
+
+/* Hide support question mark icon */
+a[aria-label="Support"] {
+    display: none !important;
+}
+
+/* Hide settings button */
+a[aria-label="Settings"] {
+    display: none !important;
+}
+
+/* Hide side panel */
+.bAw.bcf.tRcrsc {
+    display: none !important;
+}
+
+/* Hide side panel container */
+.brC-aT5-aOt-Jw {
+    display: none !important;
+}
+
+/* Hide left sidebar/navigation panel */
+.aeN.WR.baA.nH.oy8Mbf.bhZ {
+    display: none !important;
+}
+
+/* Hide left navigation container */
+div[role="navigation"].aeN {
+    display: none !important;
+}
+
+/* Hide email toolbar */
+div[id=":4"].aeH {
+    display: none !important;
+}
+
+/* Hide email toolbar container */
+.aeH .D.E.G-atb {
+    display: none !important;
+}
+
+/* Hide email management toolbar */
+.nH.aqK {
+    display: none !important;
+}
+
+/* Hide Google apps menu (9-dot grid) */
+.gb_J.gb_dd.gb_0 {
+    display: none !important;
+}
+
+/* Hide Google apps button */
+a[aria-label="Google apps"] {
+    display: none !important;
+}
+
+/* Hide hamburger menu */
+.gb_Lc {
+    display: none !important;
+}
+
+/* Hide main menu button */
+div[aria-label="Main menu"] {
+    display: none !important;
+}
+
+/* Hide search bar container */
+.gb_xe {
+    display: none !important;
+}
+
+/* Hide search form */
+form[role="search"] {
+    display: none !important;
+}
+
+/* Hide Gmail search form */
+.gb_jd.gb_bf.bas.aJf {
+    display: none !important;
+}

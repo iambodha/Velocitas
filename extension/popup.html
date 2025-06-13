@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 200px;
+      padding: 16px;
+      font-family: system-ui, sans-serif;
+      background: white;
+      color: #333;
+    }
+    
+    h1 {
+      font-size: 16px;
+      margin: 0 0 12px 0;
+    }
+    
+    label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Velocitas</h1>
+  
+  <label>
+    <input type="checkbox" id="toggle" checked>
+    Enable Extension
+  </label>
+
+  <script>
+    const toggle = document.getElementById('toggle');
+
+    // Load current status
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      chrome.tabs.sendMessage(tabs[0].id, { action: 'getStatus' }, (response) => {
+        if (response) {
+          toggle.checked = response.enabled;
+        }
+      });
+    });
+
+    // Handle toggle
+    toggle.addEventListener('change', () => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        chrome.tabs.sendMessage(tabs[0].id, { action: 'toggle' }, (response) => {
+          // Toggle handled
+        });
+      });
+    });
+  </script>
+</body>
+</html>
