@@ -1,4 +1,4 @@
-/* Velocitas Modern Theme for Gmail */
+/* Velocitas Modern Theme for Gmail - Updated for Improved Headers */
 
 /* Apply styles only when the modern theme is active */
 body.velocitas-modern-theme {
@@ -38,7 +38,6 @@ body.velocitas-modern-theme div[role="navigation"].aeN { /* Left navigation cont
     display: none !important;
 }
 
-
 body.velocitas-modern-theme div[id=":4"].aeH, /* Email toolbar */
 body.velocitas-modern-theme .aeH .D.E.G-atb, /* Email toolbar container */
 body.velocitas-modern-theme .nH.aqK /* Email management toolbar */ {
@@ -62,7 +61,6 @@ body.velocitas-modern-theme .gb_jd.gb_bf.bas.aJf {
     display: none !important;
 }
 
-
 /* --- Modern Look & Feel --- */
 
 /* Style the main content area where emails are listed and read */
@@ -79,13 +77,17 @@ body.velocitas-modern-theme .nH.bkL { /* Main email reading pane view */
 body.velocitas-modern-theme .zA { /* Individual email row */
   border-bottom: 1px solid #FFFACD !important; /* Lighter yellow border */
   padding: 12px 18px !important;
+  position: relative !important; /* Ensure proper stacking context */
+  z-index: 2 !important; /* Higher than headers */
 }
 body.velocitas-modern-theme .zA:hover {
   background-color: #FFF9C4 !important; /* Light yellow hover */
+  z-index: 3 !important; /* Even higher on hover */
 }
 body.velocitas-modern-theme .zA.PE { /* Selected email row */
   background-color: #FFEECA !important; /* Brighter valid yellow for selection */
   box-shadow: inset 3px 0 0 #FFD700 !important; /* Gold accent for selection */
+  z-index: 3 !important; /* Ensure selection is visible */
 }
 
 /* Typography in email rows */
@@ -100,7 +102,6 @@ body.velocitas-modern-theme .yO {
 body.velocitas-modern-theme .xS { /* Snippet text */
     color: #555 !important;
 }
-
 
 /* Modernize Compose Button (if it becomes visible or you re-enable parts of toolbar) */
 body.velocitas-modern-theme div[gh="cm"] { /* Common selector for Compose button */
@@ -140,10 +141,6 @@ body.velocitas-modern-theme .asa[aria-label="Refresh"] .ar6::before {
 /* Example: Style a generic "more options" (three dots) icon
    Again, '.some-icon-wrapper .actual-icon-element' is a placeholder for real selectors.
 */
-/* body.velocitas-modern-theme .some-icon-wrapper .actual-icon-element {
-  /* Hide original icon if it's text/font-based or an img */
-  /* display: none !important; or font-size: 0 !important; or visibility: hidden !important; */
-/* } */
 body.velocitas-modern-theme .some-icon-wrapper::before {
   content: '';
   display: inline-block;
@@ -156,16 +153,6 @@ body.velocitas-modern-theme .some-icon-wrapper::before {
   background-size: contain;
   vertical-align: middle;
 }
-
-/* If you want to use a specific icon library (e.g., Font Awesome) after including it:
-body.velocitas-modern-theme .some-gmail-icon-selector::before {
-  font-family: "Font Awesome 6 Free";
-  font-weight: 900;
-  content: "\f007"; // Example: user icon
-  font-size: 18px;
-  color: #337ab7;
-}
-*/
 
 /* Remove default Gmail borders from some toolbars if they are made visible and restyled */
 body.velocitas-modern-theme .D.G-atb, body.velocitas-modern-theme .Di {
@@ -192,24 +179,143 @@ body.velocitas-modern-theme .nH.Hd[role="main"] {
     padding: 20px !important; /* Add padding to the main email content area */
 }
 
-/* Styles for Date Group Headers */
+/* ==========================================
+   IMPROVED DATE GROUP HEADERS STYLES
+   ========================================== */
+
+/* Base styles for all date group headers */
+body.velocitas-modern-theme .velocitas-date-group-header {
+  /* Ensure headers don't interfere with email interactions */
+  pointer-events: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  
+  /* Proper positioning in stacking context */
+  position: relative !important;
+  z-index: 1 !important; /* Lower than email rows */
+  
+  /* Smooth appearance */
+  transition: all 0.2s ease-in-out !important;
+}
+
+/* Cell styling for date headers */
 body.velocitas-modern-theme .velocitas-date-group-header td {
-  background-color: #f0f0f0 !important; /* Light grey background for headers */
-  color: #333333 !important;
-  padding: 8px 18px !important;
-  font-weight: bold !important;
+  background-color: #FFFACD !important; /* Light yellow background */
+  color: #4A4A4A !important; /* Darker text for readability */
+  padding: 10px 18px !important; /* Slightly more padding for better appearance */
+  font-weight: 600 !important; /* Slightly bolder */
   font-size: 13px !important;
-  border-top: 1px solid #dddddd !important;
-  border-bottom: 1px solid #dddddd !important;
-}
-
-/* Yellow & White Theme Adjustments for Date Group Headers */
-body.velocitas-modern-theme .velocitas-date-group-header td {
-  background-color: #FFFACD !important; /* Light yellow background for headers */
-  color: #4A4A4A !important; /* Darker text for readability on yellow */
-  border-top: 1px solid #FFEE58 !important;
+  font-family: inherit !important; /* Use the same font as the theme */
+  
+  /* Enhanced borders */
+  border-top: 2px solid #FFE082 !important; /* Slightly thicker, more visible border */
   border-bottom: 1px solid #FFEE58 !important;
+  border-left: none !important;
+  border-right: none !important;
+  
+  /* Prevent any interaction */
+  pointer-events: none !important;
+  user-select: none !important;
+  cursor: default !important;
+  
+  /* Consistent height and spacing */
+  height: 36px !important;
+  box-sizing: border-box !important;
+  line-height: 1.4 !important;
+  
+  /* Subtle shadow for depth */
+  box-shadow: 0 1px 3px rgba(255, 215, 0, 0.1) !important;
 }
 
+/* Hover effect for the section (not the header itself) */
+body.velocitas-modern-theme .velocitas-date-group-header + .zA:hover ~ .velocitas-date-group-header td,
+body.velocitas-modern-theme .zA:hover + .velocitas-date-group-header td {
+  background-color: #FFF8DC !important; /* Slightly warmer yellow when nearby email is hovered */
+}
+
+/* Alternative overlay header styles (if using the overlay approach) */
+body.velocitas-modern-theme .velocitas-date-group-header-overlay {
+  background: linear-gradient(135deg, #FFFACD 0%, #FFF8DC 100%) !important; /* Subtle gradient */
+  color: #4A4A4A !important;
+  padding: 10px 18px !important;
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  font-family: inherit !important;
+  
+  /* Enhanced borders and shadow */
+  border-top: 2px solid #FFE082 !important;
+  border-bottom: 1px solid #FFEE58 !important;
+  box-shadow: 0 2px 4px rgba(255, 215, 0, 0.15) !important;
+  
+  /* Prevent interaction */
+  pointer-events: none !important;
+  user-select: none !important;
+  cursor: default !important;
+  
+  /* Smooth transitions */
+  transition: all 0.2s ease-in-out !important;
+  
+  /* Typography improvements */
+  line-height: 1.4 !important;
+  letter-spacing: 0.3px !important;
+}
+
+/* Ensure headers work well with Gmail's dynamic loading */
+body.velocitas-modern-theme .velocitas-date-group-header,
+body.velocitas-modern-theme .velocitas-date-group-header-overlay {
+  /* Prevent Gmail from treating these as interactive elements */
+  -webkit-touch-callout: none !important;
+  -webkit-user-select: none !important;
+  -khtml-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  user-select: none !important;
+  
+  /* Ensure they don't interfere with Gmail's event handling */
+  pointer-events: none !important;
+}
+
+/* Fix for any potential z-index conflicts */
+body.velocitas-modern-theme .velocitas-date-group-header {
+  isolation: isolate !important; /* Create new stacking context */
+}
+
+/* Responsive adjustments for smaller screens */
+@media (max-width: 768px) {
+  body.velocitas-modern-theme .velocitas-date-group-header td,
+  body.velocitas-modern-theme .velocitas-date-group-header-overlay {
+    padding: 8px 12px !important;
+    font-size: 12px !important;
+  }
+}
+
+/* Dark mode compatibility (if Gmail ever adds it or user forces it) */
+@media (prefers-color-scheme: dark) {
+  body.velocitas-modern-theme .velocitas-date-group-header td,
+  body.velocitas-modern-theme .velocitas-date-group-header-overlay {
+    background-color: #2A2A2A !important;
+    color: #E0E0E0 !important;
+    border-color: #444 !important;
+  }
+}
+
+/* Animation for newly inserted headers */
+@keyframes velocitas-header-appear {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+body.velocitas-modern-theme .velocitas-date-group-header:not(.velocitas-no-animation),
+body.velocitas-modern-theme .velocitas-date-group-header-overlay:not(.velocitas-no-animation) {
+  animation: velocitas-header-appear 0.3s ease-out !important;
+}
 
 /* Further fine-tuning will be needed by inspecting Gmail's live DOM */

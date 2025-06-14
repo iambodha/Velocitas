@@ -1,188 +1,222 @@
-class DateHeaderManager {
-    constructor() {
-        this.insertedHeaders = new Set();
-        this.observer = null;
-        this.debounceTimer = null;
+(() => {
+    'use strict';
+
+    // Prevent multiple initialization
+    if (window.VelocitasExtension) {
+        console.log('Velocitas: Already initialized, skipping...');
+        return;
     }
 
-    // Main method to insert date headers with improved reliability
-    insertDateHeader(category, row, emailContainer) {
-        if (!category || !row || !emailContainer) {
-            console.warn("Velocitas: Invalid parameters for header insertion");
-            return;
+    class DateHeaderManager {
+        constructor() {
+            this.insertedHeaders = new Map(); // Use Map to store header metadata
+            this.observer = null;
+            this.debounceTimer = null;
+            this.headerPositions = new WeakMap(); // Track header-row relationships
         }
 
-        const headerId = `velocitas-group-${this._sanitizeId(category)}`;
-        
-        // Check if we already handled this header recently
-        if (this.insertedHeaders.has(headerId)) {
-            const existingHeader = document.getElementById(headerId);
-            if (existingHeader && this._isHeaderPositionedCorrectly(existingHeader, row)) {
+        // Main method to insert date headers with improved reliability
+        insertDateHeader(category, row, emailContainer) {
+            if (!category || !row || !emailContainer) {
+                console.warn("Velocitas: Invalid parameters for header insertion");
                 return;
             }
-        }
 
-        this._cleanupExistingHeader(headerId);
-        this._createAndInsertHeader(headerId, category, row, emailContainer);
-        
-        // Track insertion to prevent duplicates
-        this.insertedHeaders.add(headerId);
-        
-        // Clean up tracking after a delay
-        setTimeout(() => this.insertedHeaders.delete(headerId), 1000);
-    }
-
-    // Create and insert the header element
-    _createAndInsertHeader(headerId, category, row, emailContainer) {
-        const headerElement = document.createElement('tr');
-        headerElement.id = headerId;
-        headerElement.className = 'velocitas-date-group-header';
-        
-        // Critical: Prevent all interaction with header
-        this._makeElementNonInteractive(headerElement);
-        
-        const headerCell = this._createHeaderCell(category, row);
-        headerElement.appendChild(headerCell);
-        
-        try {
-            emailContainer.insertBefore(headerElement, row);
+            const headerId = `velocitas-group-${this._sanitizeId(category)}`;
+            const rowId = this._getRowIdentifier(row);
             
-            // Add mutation observer to handle dynamic changes
-            this._observeHeaderStability(headerElement, row);
-            
-        } catch (error) {
-            console.error("Velocitas: Failed to insert header:", error);
-        }
-    }
-
-    // Create the header cell with proper styling
-    _createHeaderCell(category, row) {
-        const headerCell = document.createElement('td');
-        const colCount = this._getColumnCount(row);
-        
-        headerCell.colSpan = colCount;
-        headerCell.textContent = category;
-        
-        // Apply comprehensive styling
-        headerCell.style.cssText = `
-            background-color: #FFFACD !important;
-            color: #4A4A4A !important;
-            padding: 8px 18px !important;
-            font-weight: bold !important;
-            font-size: 13px !important;
-            border-top: 1px solid #FFEE58 !important;
-            border-bottom: 1px solid #FFEE58 !important;
-            pointer-events: none !important;
-            user-select: none !important;
-            position: relative !important;
-            z-index: 1 !important;
-            height: 32px !important;
-            box-sizing: border-box !important;
-        `;
-        
-        return headerCell;
-    }
-
-    // Make element completely non-interactive
-    _makeElementNonInteractive(element) {
-        element.style.cssText += `
-            pointer-events: none !important;
-            user-select: none !important;
-            -webkit-user-select: none !important;
-            -moz-user-select: none !important;
-            -ms-user-select: none !important;
-            cursor: default !important;
-        `;
-        
-        // Prevent event bubbling
-        element.addEventListener('click', (e) => {
-            e.stopPropagation();
-            e.preventDefault();
-        }, true);
-        
-        element.addEventListener('mousedown', (e) => {
-            e.stopPropagation();
-            e.preventDefault();
-        }, true);
-    }
-
-    // Clean up any existing header
-    _cleanupExistingHeader(headerId) {
-        const existing = document.getElementById(headerId);
-        if (existing) {
-            // Stop observing if we were watching this element
-            if (this.observer) {
-                this.observer.disconnect();
+            // Check if we already have a header for this exact position
+            if (this._hasValidHeaderForRow(headerId, row)) {
+                return;
             }
-            existing.remove();
-        }
-    }
 
-    // Check if header is positioned correctly
-    _isHeaderPositionedCorrectly(header, targetRow) {
-        return header.nextElementSibling === targetRow && 
-               header.parentNode === targetRow.parentNode;
-    }
-
-    // Get column count for proper colspan
-    _getColumnCount(row) {
-        if (row.cells && row.cells.length > 0) {
-            return row.cells.length;
+            // Clean up any orphaned headers for this category
+            this._cleanupExistingHeader(headerId);
+            
+            // Create and insert new header
+            this._createAndInsertHeader(headerId, category, row, emailContainer);
+            
+            // Track the header-row relationship
+            this.insertedHeaders.set(headerId, {
+                category,
+                rowId,
+                timestamp: Date.now()
+            });
         }
-        
-        // Fallback: look at other rows in the same table
-        const table = row.closest('table');
-        if (table) {
-            const firstRow = table.querySelector('tr');
-            if (firstRow && firstRow.cells) {
-                return firstRow.cells.length;
+
+        // Check if a valid header already exists for this row
+        _hasValidHeaderForRow(headerId, targetRow) {
+            const existingHeader = document.getElementById(headerId);
+            if (!existingHeader) return false;
+
+            // Check if header is correctly positioned
+            return existingHeader.nextElementSibling === targetRow && 
+                   existingHeader.parentNode === targetRow.parentNode &&
+                   document.contains(existingHeader);
+        }
+
+        // Generate a unique identifier for a row
+        _getRowIdentifier(row) {
+            // Use multiple attributes to create a stable identifier
+            const text = (row.textContent || '').trim().substring(0, 50);
+            const index = Array.from(row.parentNode.children).indexOf(row);
+            return `${text}-${index}`;
+        }
+
+        // Create and insert the header element
+        _createAndInsertHeader(headerId, category, row, emailContainer) {
+            const headerElement = document.createElement('tr');
+            headerElement.id = headerId;
+            headerElement.className = 'velocitas-date-group-header';
+            
+            // Mark as Velocitas element for easy identification
+            headerElement.setAttribute('data-velocitas-header', 'true');
+            
+            // Critical: Prevent all interaction with header
+            this._makeElementNonInteractive(headerElement);
+            
+            const headerCell = this._createHeaderCell(category, row);
+            headerElement.appendChild(headerCell);
+            
+            try {
+                emailContainer.insertBefore(headerElement, row);
+                
+                // Store the relationship for position tracking
+                this.headerPositions.set(headerElement, row);
+                
+                // Set up stability monitoring
+                this._setupHeaderMonitoring(headerElement, row);
+                
+                console.log(`Velocitas: Inserted header "${category}" before row`);
+                
+            } catch (error) {
+                console.error("Velocitas: Failed to insert header:", error);
             }
         }
-        
-        return 6; // Default fallback
-    }
 
-    // Sanitize category for use as ID
-    _sanitizeId(category) {
-        return category.replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase();
-    }
-
-    // Observe header to ensure it stays in place
-    _observeHeaderStability(headerElement, targetRow) {
-        // Debounce to avoid excessive checking
-        if (this.debounceTimer) {
-            clearTimeout(this.debounceTimer);
+        // Create the header cell with proper styling
+        _createHeaderCell(category, row) {
+            const headerCell = document.createElement('td');
+            const colCount = this._getColumnCount(row);
+            
+            headerCell.colSpan = colCount;
+            headerCell.textContent = category;
+            
+            // Apply comprehensive styling with better isolation
+            headerCell.style.cssText = `
+                background: linear-gradient(135deg, #FFFACD 0%, #FFF8DC 100%) !important;
+                color: #4A4A4A !important;
+                padding: 8px 18px !important;
+                font-weight: 600 !important;
+                font-size: 13px !important;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+                border-top: 2px solid #FFEE58 !important;
+                border-bottom: 1px solid #FFEE58 !important;
+                border-left: none !important;
+                border-right: none !important;
+                pointer-events: none !important;
+                user-select: none !important;
+                position: relative !important;
+                z-index: 0 !important;
+                height: 36px !important;
+                box-sizing: border-box !important;
+                text-align: left !important;
+                vertical-align: middle !important;
+                white-space: nowrap !important;
+                overflow: hidden !important;
+                text-overflow: ellipsis !important;
+            `;
+            
+            return headerCell;
         }
-        
-        this.debounceTimer = setTimeout(() => {
+
+        // Make element completely non-interactive with better event handling
+        _makeElementNonInteractive(element) {
+            // Set CSS properties for non-interaction
+            element.style.cssText += `
+                pointer-events: none !important;
+                user-select: none !important;
+                -webkit-user-select: none !important;
+                -moz-user-select: none !important;
+                -ms-user-select: none !important;
+                cursor: default !important;
+                position: relative !important;
+                z-index: 0 !important;
+            `;
+            
+            // Add comprehensive event prevention
+            const preventEvents = ['click', 'mousedown', 'mouseup', 'mouseover', 'mouseout', 
+                                 'contextmenu', 'selectstart', 'dragstart', 'focus', 'blur'];
+            
+            preventEvents.forEach(eventType => {
+                element.addEventListener(eventType, (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    return false;
+                }, { capture: true, passive: false });
+            });
+        }
+
+        // Clean up any existing header
+        _cleanupExistingHeader(headerId) {
+            const existing = document.getElementById(headerId);
+            if (existing) {
+                // Stop observing if we were watching this element
+                if (this.observer) {
+                    this.observer.disconnect();
+                    this.observer = null;
+                }
+                existing.remove();
+                this.insertedHeaders.delete(headerId);
+                console.log(`Velocitas: Cleaned up existing header: ${headerId}`);
+            }
+        }
+
+        // Setup monitoring for header stability
+        _setupHeaderMonitoring(headerElement, targetRow) {
+            // Clear any existing timer
+            if (this.debounceTimer) {
+                clearTimeout(this.debounceTimer);
+            }
+            
+            // Debounced monitoring setup
+            this.debounceTimer = setTimeout(() => {
+                this._initializeHeaderObserver(headerElement, targetRow);
+            }, 100);
+        }
+
+        // Initialize mutation observer for header stability
+        _initializeHeaderObserver(headerElement, targetRow) {
             if (this.observer) {
                 this.observer.disconnect();
             }
             
             this.observer = new MutationObserver((mutations) => {
                 let needsRepositioning = false;
+                let headerStillExists = document.contains(headerElement);
+                let targetStillExists = document.contains(targetRow);
+                
+                if (!headerStillExists || !targetStillExists) {
+                    this.observer.disconnect();
+                    return;
+                }
                 
                 mutations.forEach((mutation) => {
                     if (mutation.type === 'childList') {
-                        // Check if our header got moved or removed
-                        if (!document.contains(headerElement) || 
-                            headerElement.nextElementSibling !== targetRow) {
+                        // Check if header got displaced
+                        if (headerElement.nextElementSibling !== targetRow ||
+                            headerElement.parentNode !== targetRow.parentNode) {
                             needsRepositioning = true;
                         }
                     }
                 });
                 
-                if (needsRepositioning && document.contains(targetRow)) {
-                    console.log("Velocitas: Repositioning displaced header");
-                    try {
-                        targetRow.parentNode.insertBefore(headerElement, targetRow);
-                    } catch (e) {
-                        console.warn("Velocitas: Could not reposition header:", e);
-                    }
+                if (needsRepositioning) {
+                    this._repositionHeader(headerElement, targetRow);
                 }
             });
             
-            // Observe the parent container for changes
+            // Observe the parent container
             const container = targetRow.parentNode;
             if (container) {
                 this.observer.observe(container, {
@@ -190,91 +224,225 @@ class DateHeaderManager {
                     subtree: false
                 });
             }
-        }, 100);
+        }
+
+        // Reposition a displaced header
+        _repositionHeader(headerElement, targetRow) {
+            try {
+                if (document.contains(targetRow) && document.contains(headerElement)) {
+                    targetRow.parentNode.insertBefore(headerElement, targetRow);
+                    console.log("Velocitas: Repositioned displaced header");
+                }
+            } catch (error) {
+                console.warn("Velocitas: Could not reposition header:", error);
+                // If repositioning fails, remove the broken header
+                headerElement.remove();
+            }
+        }
+
+        // Get column count for proper colspan
+        _getColumnCount(row) {
+            if (row.cells && row.cells.length > 0) {
+                return row.cells.length;
+            }
+            
+            // Fallback: look at other rows in the same table
+            const table = row.closest('table, tbody');
+            if (table) {
+                const rows = table.querySelectorAll('tr');
+                for (let testRow of rows) {
+                    if (testRow.cells && testRow.cells.length > 0) {
+                        return testRow.cells.length;
+                    }
+                }
+            }
+            
+            return 6; // Gmail typically has 6 columns
+        }
+
+        // Sanitize category for use as ID
+        _sanitizeId(category) {
+            return category.replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase().substring(0, 50);
+        }
+
+        // Cleanup method
+        cleanup() {
+            console.log('Velocitas: Cleaning up DateHeaderManager');
+            
+            // Disconnect observer
+            if (this.observer) {
+                this.observer.disconnect();
+                this.observer = null;
+            }
+            
+            // Clear debounce timer
+            if (this.debounceTimer) {
+                clearTimeout(this.debounceTimer);
+                this.debounceTimer = null;
+            }
+            
+            // Remove all headers
+            document.querySelectorAll('.velocitas-date-group-header').forEach(header => {
+                header.remove();
+            });
+            
+            // Clear tracking
+            this.insertedHeaders.clear();
+            this.headerPositions = new WeakMap();
+        }
+
+        // Get current stats for debugging
+        getStats() {
+            return {
+                trackedHeaders: this.insertedHeaders.size,
+                activeHeaders: document.querySelectorAll('.velocitas-date-group-header').length,
+                observerActive: !!this.observer
+            };
+        }
     }
 
-    // Cleanup method to call when the extension is disabled/removed
-    cleanup() {
-        if (this.observer) {
-            this.observer.disconnect();
+    // Main Extension Controller
+    class VelocitasExtension {
+        constructor() {
+            this.headerManager = new DateHeaderManager();
+            this.isEnabled = true;
+            this.initialized = false;
+            this.messageListener = null;
         }
-        
-        if (this.debounceTimer) {
-            clearTimeout(this.debounceTimer);
+
+        async init() {
+            if (this.initialized) {
+                console.log('Velocitas: Already initialized');
+                return;
+            }
+
+            console.log('Velocitas: Initializing extension...');
+
+            try {
+                // Load saved state
+                const result = await chrome.storage.local.get(['velocitasEnabled']);
+                this.isEnabled = result.velocitasEnabled !== false; // Default to true
+            } catch (error) {
+                console.log('Velocitas: Using default enabled state (storage unavailable)');
+                this.isEnabled = true;
+            }
+
+            // Set up message listener (avoid duplicates)
+            this._setupMessageListener();
+
+            // Apply initial state
+            this.applyTheme();
+
+            // Initialize features after page is ready
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', () => this._initializeFeatures());
+            } else {
+                this._initializeFeatures();
+            }
+
+            this.initialized = true;
+            console.log(`Velocitas: Extension initialized (enabled: ${this.isEnabled})`);
         }
-        
-        // Remove all headers
-        document.querySelectorAll('.velocitas-date-group-header').forEach(header => {
-            header.remove();
+
+        _setupMessageListener() {
+            // Remove existing listener if any
+            if (this.messageListener) {
+                chrome.runtime.onMessage.removeListener(this.messageListener);
+            }
+
+            // Create new listener
+            this.messageListener = (message, sender, sendResponse) => {
+                try {
+                    if (message.action === 'toggle') {
+                        this.toggle();
+                        sendResponse({ enabled: this.isEnabled });
+                    } else if (message.action === 'getStatus') {
+                        sendResponse({ 
+                            enabled: this.isEnabled,
+                            stats: this.headerManager.getStats()
+                        });
+                    } else if (message.action === 'cleanup') {
+                        this.headerManager.cleanup();
+                        sendResponse({ success: true });
+                    }
+                } catch (error) {
+                    console.error('Velocitas: Error handling message:', error);
+                    sendResponse({ error: error.message });
+                }
+                return true; // Keep message channel open for async response
+            };
+
+            chrome.runtime.onMessage.addListener(this.messageListener);
+        }
+
+        toggle() {
+            this.isEnabled = !this.isEnabled;
+            this.applyTheme();
+            
+            // Save state
+            try {
+                chrome.storage.local.set({ velocitasEnabled: this.isEnabled });
+            } catch (error) {
+                console.warn('Velocitas: Could not save state:', error);
+            }
+            
+            console.log(`Velocitas: Toggled to ${this.isEnabled ? 'enabled' : 'disabled'}`);
+        }
+
+        applyTheme() {
+            if (this.isEnabled) {
+                document.body.classList.add('velocitas-modern-theme');
+                console.log('Velocitas: Theme enabled');
+            } else {
+                document.body.classList.remove('velocitas-modern-theme');
+                this.headerManager.cleanup();
+                console.log('Velocitas: Theme disabled and cleaned up');
+            }
+        }
+
+        _initializeFeatures() {
+            if (!this.isEnabled) {
+                console.log('Velocitas: Skipping feature initialization (disabled)');
+                return;
+            }
+
+            console.log('Velocitas: Features initialized');
+            
+            // Add any additional features here
+            // Example: this._startEmailGrouping();
+        }
+
+        // Cleanup method for when extension is disabled/removed
+        cleanup() {
+            console.log('Velocitas: Cleaning up extension');
+            
+            if (this.messageListener) {
+                chrome.runtime.onMessage.removeListener(this.messageListener);
+                this.messageListener = null;
+            }
+            
+            this.headerManager.cleanup();
+            document.body.classList.remove('velocitas-modern-theme');
+            this.initialized = false;
+        }
+    }
+
+    // Prevent multiple instances and provide global access
+    if (!window.VelocitasExtension) {
+        // Initialize the extension
+        window.VelocitasExtension = new VelocitasExtension();
+        window.VelocitasExtension.init().catch(error => {
+            console.error('Velocitas: Failed to initialize:', error);
         });
-        
-        this.insertedHeaders.clear();
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (window.VelocitasExtension) {
+                window.VelocitasExtension.cleanup();
+            }
+        });
+
+        console.log('Velocitas: Bundle loaded and initialized');
     }
-}
 
-// Usage example:
-const headerManager = new DateHeaderManager();
-
-// Replace your existing _insertDateHeader method with:
-function _insertDateHeader(category, row, emailContainer) {
-    headerManager.insertDateHeader(category, row, emailContainer);
-}
-
-// Alternative: If you prefer to keep it as a simple function without the class:
-function insertDateHeaderImproved(category, row, emailContainer) {
-    if (!category || !row || !emailContainer) return;
-    
-    const headerId = `velocitas-group-${category.replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase()}`;
-    
-    // Remove existing header
-    const existing = document.getElementById(headerId);
-    if (existing) existing.remove();
-    
-    // Create new header
-    const headerElement = document.createElement('tr');
-    headerElement.id = headerId;
-    headerElement.className = 'velocitas-date-group-header';
-    
-    // Make completely non-interactive
-    headerElement.style.cssText = `
-        pointer-events: none !important;
-        user-select: none !important;
-        -webkit-user-select: none !important;
-        -moz-user-select: none !important;
-        cursor: default !important;
-    `;
-    
-    // Create cell
-    const cell = document.createElement('td');
-    cell.colSpan = row.cells.length || 6;
-    cell.textContent = category;
-    cell.style.cssText = `
-        background-color: #FFFACD !important;
-        color: #4A4A4A !important;
-        padding: 8px 18px !important;
-        font-weight: bold !important;
-        font-size: 13px !important;
-        border-top: 1px solid #FFEE58 !important;
-        border-bottom: 1px solid #FFEE58 !important;
-        pointer-events: none !important;
-        user-select: none !important;
-        height: 32px !important;
-        box-sizing: border-box !important;
-    `;
-    
-    headerElement.appendChild(cell);
-    
-    // Prevent event bubbling
-    ['click', 'mousedown', 'mouseup'].forEach(eventType => {
-        headerElement.addEventListener(eventType, (e) => {
-            e.stopPropagation();
-            e.preventDefault();
-        }, true);
-    });
-    
-    try {
-        emailContainer.insertBefore(headerElement, row);
-    } catch (error) {
-        console.error("Velocitas: Header insertion failed:", error);
-    }
-}
+})();
