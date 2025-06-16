@@ -1321,59 +1321,101 @@ window.EmailExtractor = class EmailExtractor {
 
     // Improved single email unread marking
     _markSingleEmailAsUnreadImproved(emailRow, emailNumber, emailSubject) {
-        console.log(`Velocitas: Marking email ${emailNumber} as unread: "${emailSubject}"`);
-        
+        console.log(`Velocitas: Marking email ${emailNumber} ("${emailSubject}") as unread.`);
+        if (!emailRow || !document.contains(emailRow)) {
+            console.warn(`Velocitas: Email row ${emailNumber} not found in DOM. Cannot mark as unread.`);
+            return;
+        }
+
+        // Method 1: Try to focus the row and send keyboard shortcut (more robust for single items)
         try {
-            // First, ensure we can find the email row
-            if (!emailRow || !document.contains(emailRow)) {
-                console.warn(`Velocitas: Email row ${emailNumber} not found in DOM`);
-                return;
-            }
+            console.log(`Velocitas: Attempting focus method for email ${emailNumber}.`);
+            emailRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 
-            // Method 1: Try selecting the email and using keyboard shortcut
-            const checkbox = emailRow.querySelector('input[type="checkbox"]') ||
-                            emailRow.querySelector('.oZ-x3-V') ||
-                            emailRow.querySelector('[role="checkbox"]') ||
-                            emailRow.querySelector('div[role="checkbox"]');
-            
-            if (checkbox) {
-                console.log(`Velocitas: Found checkbox for email ${emailNumber}, attempting keyboard shortcut`);
-                
-                // Ensure checkbox is not already checked
-                if (!checkbox.checked) {
-                    // Check the checkbox to select the email
-                    checkbox.click();
-                    
-                    // Wait a bit for Gmail to register the selection
-                    setTimeout(() => {
-                        // Focus on the main Gmail area to ensure keyboard events work
-                        const gmailMain = document.querySelector('[role="main"]') || 
-                                        document.querySelector('.nH') || 
-                                        document.querySelector('#\\:7k') || // Gmail's main content area
-                                        document.body;
-                        gmailMain.focus();
-                        
-                        // Send the keyboard shortcut
-                        this._sendUnreadKeyboardShortcut();
-                        
-                        // Uncheck the checkbox after a delay
-                        setTimeout(() => {
-                            if (checkbox.checked) {
-                                checkbox.click();
-                            }
-                            console.log(`Velocitas: Completed unread marking for email ${emailNumber}`);
-                        }, 500);
-                        
-                    }, 200);
+            setTimeout(() => {
+                let focusableElement = emailRow;
+                // Prefer a naturally focusable child if available, otherwise make the row focusable.
+                const interactiveChild = emailRow.querySelector('a[href], button, input, select, textarea, [tabindex="0"]');
+                if (interactiveChild) {
+                    focusableElement = interactiveChild;
+                } else if (!emailRow.hasAttribute('tabindex') || emailRow.getAttribute('tabindex') === "-1") {
+                    emailRow.setAttribute('tabindex', '0'); // Make row itself temporarily focusable
                 }
+
+                focusableElement.focus({ preventScroll: true });
+                console.log(`Velocitas: Focused element for email ${emailNumber}:`, focusableElement);
+
+                setTimeout(() => {
+                    this._sendUnreadKeyboardShortcut();
+                    console.log(`Velocitas: Sent Shift+U after focusing row ${emailNumber}.`);
+
+                    setTimeout(() => {
+                        if (emailRow.classList.contains('zE')) { // 'zE' is Gmail's unread class
+                            console.log(`Velocitas: Email ${emailNumber} appears unread after focus method.`);
+                        } else {
+                            console.warn(`Velocitas: Email ${emailNumber} NOT unread after focus. Trying checkbox method.`);
+                            this._tryMarkUnreadViaCheckboxAndShortcut(emailRow, emailNumber, emailSubject);
+                        }
+                    }, 750); // Delay for DOM updates
+                }, 250); // Delay after focus
+            }, 200); // Delay after scroll
+        } catch (e) {
+            console.error(`Velocitas: Error during focus method for email ${emailNumber}: ${e}. Trying checkbox method.`);
+            this._tryMarkUnreadViaCheckboxAndShortcut(emailRow, emailNumber, emailSubject);
+        }
+    }
+
+    // New helper for the checkbox-based attempt (Method 2)
+    _tryMarkUnreadViaCheckboxAndShortcut(emailRow, emailNumber, emailSubject) {
+        console.log(`Velocitas: Trying checkbox method for email ${emailNumber} ("${emailSubject}").`);
+        const checkbox = emailRow.querySelector('input[type="checkbox"], div[role="checkbox"]');
+
+        if (checkbox) {
+            const isInput = checkbox.tagName === 'INPUT';
+            const originalCheckedState = isInput ? checkbox.checked : checkbox.getAttribute('aria-checked') === 'true';
+            let changedStateForAction = false;
+
+            if (!originalCheckedState) {
+                checkbox.click(); // Check it
+                changedStateForAction = true;
+                console.log(`Velocitas: Checked checkbox for ${emailNumber} to mark unread.`);
             } else {
-                console.log(`Velocitas: No checkbox found for email ${emailNumber}, trying CSS method`);
-                this._markUnreadWithClasses(emailRow);
+                console.log(`Velocitas: Checkbox for ${emailNumber} was already checked. Ensuring it is the active selection.`);
+                // To ensure it's the "active" selection for the shortcut, simulate a re-selection
+                checkbox.click(); // Uncheck
+                setTimeout(() => { checkbox.click(); }, 50); // Re-check immediately
             }
 
-        } catch (error) {
-            console.warn(`Velocitas: Failed to mark email ${emailNumber} as unread:`, error);
-            this._markUnreadWithClasses(emailRow);
+            setTimeout(() => {
+                const gmailMainArea = document.querySelector('[role="main"], .nH, body');
+                if (gmailMainArea) {
+                    gmailMainArea.focus();
+                }
+
+                this._sendUnreadKeyboardShortcut();
+                console.log(`Velocitas: Sent Shift+U for email ${emailNumber} via checkbox method.`);
+
+                setTimeout(() => {
+                    if (changedStateForAction) {
+                        const currentCheckedState = isInput ? checkbox.checked : checkbox.getAttribute('aria-checked') === 'true';
+                        if (currentCheckedState) { // If we had checked it and it's still checked
+                           checkbox.click(); // Uncheck it back to original state
+                           console.log(`Velocitas: Restored checkbox for ${emailNumber} to original unchecked state.`);
+                        }
+                    }
+                    // If it was originally checked, the uncheck/re-check sequence should leave it checked.
+
+                    if (emailRow.classList.contains('zE')) {
+                        console.log(`Velocitas: Email ${emailNumber} appears unread after checkbox method.`);
+                    } else {
+                        console.warn(`Velocitas: Email ${emailNumber} NOT unread after checkbox. Falling back to CSS method.`);
+                        this._markUnreadWithClasses(emailRow); // Method 3: Fallback
+                    }
+                }, 750);
+            }, changedStateForAction ? 200 : 250); // Delay for checkbox click(s) to register
+        } else {
+            console.warn(`Velocitas: No checkbox found for email ${emailNumber}. Using CSS method directly.`);
+            this._markUnreadWithClasses(emailRow); // Method 3: Fallback
         }
     }
 
@@ -1381,85 +1423,36 @@ window.EmailExtractor = class EmailExtractor {
     _sendUnreadKeyboardShortcut() {
         console.log('Velocitas: Sending Shift+U keyboard shortcut to mark as unread');
         
-        // Focus on the main Gmail container first
-        const gmailMain = document.querySelector('[role="main"]') || 
-                        document.querySelector('.nH') || 
-                        document.querySelector('#\\:7k') || // Gmail's main content area
-                        document.body;
+        const eventTarget = document.body; // Dispatch to body, Gmail's global listeners should pick it up.
         
-        if (gmailMain) {
-            gmailMain.focus();
+        const commonEventProps = {
+            key: 'U',
+            code: 'KeyU',
+            keyCode: 85, // 'U'
+            which: 85,   // 'U'
+            shiftKey: true,
+            ctrlKey: false,
+            altKey: false,
+            metaKey: false,
+            bubbles: true,
+            cancelable: true,
+            composed: true, // Important for events crossing shadow DOM boundaries (though less likely an issue here)
+            view: window
+        };
+        
+        const keydownEvent = new KeyboardEvent('keydown', commonEventProps);
+        const keyupEvent = new KeyboardEvent('keyup', commonEventProps);
+        // Some implementations might also listen for keypress for character keys with modifiers
+        const keypressEvent = new KeyboardEvent('keypress', { ...commonEventProps, charCode: 85 });
+        
+        try {
+            eventTarget.dispatchEvent(keydownEvent);
+            eventTarget.dispatchEvent(keypressEvent);
+            eventTarget.dispatchEvent(keyupEvent);
+            console.log('Velocitas: Sent Shift+U keyboard events to document.body');
+        } catch (error) {
+            console.warn('Velocitas: Failed to dispatch Shift+U to document.body:', error);
         }
-        
-        // Create proper keyboard events for Shift+U
-        const keydownEvent = new KeyboardEvent('keydown', {
-            key: 'U',
-            code: 'KeyU',
-            keyCode: 85,
-            which: 85,
-            shiftKey: true,
-            ctrlKey: false,
-            altKey: false,
-            metaKey: false,
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-            view: window
-        });
-        
-        const keyupEvent = new KeyboardEvent('keyup', {
-            key: 'U',
-            code: 'KeyU',
-            keyCode: 85,
-            which: 85,
-            shiftKey: true,
-            ctrlKey: false,
-            altKey: false,
-            metaKey: false,
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-            view: window
-        });
-        
-        // Also create keypress event for better compatibility
-        const keypressEvent = new KeyboardEvent('keypress', {
-            key: 'U',
-            code: 'KeyU',
-            keyCode: 85,
-            which: 85,
-            charCode: 85,
-            shiftKey: true,
-            ctrlKey: false,
-            altKey: false,
-            metaKey: false,
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-            view: window
-        });
-        
-        // Try dispatching to multiple targets for better success rate
-        const targets = [
-            document.activeElement,
-            gmailMain,
-            document.querySelector('body'),
-            document,
-            window
-        ].filter(target => target);
-        
-        // Dispatch all events to all targets
-        targets.forEach(target => {
-            try {
-                target.dispatchEvent(keydownEvent);
-                target.dispatchEvent(keypressEvent);
-                target.dispatchEvent(keyupEvent);
-            } catch (error) {
-                console.warn('Velocitas: Failed to dispatch to target:', error);
-            }
-        });
-        
-        console.log('Velocitas: Sent Shift+U keyboard events to multiple targets');
     }
 
     // Show syncing overlay for multiple emails
