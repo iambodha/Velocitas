@@ -21,8 +21,8 @@ window.EmailExtractor = class EmailExtractor {
         
         // Wait for Gmail to load if needed
         if (!this._isGmailLoaded()) {
-            console.log('Velocitas: Gmail not fully loaded, retrying in 2 seconds...');
-            setTimeout(() => this.extractFirstEmail(), 2000);
+            console.log('Velocitas: Gmail not fully loaded, retrying in 1 second...');
+            setTimeout(() => this.extractFirstEmail(), 1000); // Reduced from 2000ms
             return null;
         }
 
@@ -198,7 +198,7 @@ window.EmailExtractor = class EmailExtractor {
         // Method 2: Try constructing URL and navigating (fallback)
         setTimeout(() => {
             this._tryUrlNavigationExtraction(emailData);
-        }, 1000);
+        }, 500); // Reduced from 1000ms
     }
 
     // Method 1: Try direct click simulation on the email row
@@ -243,7 +243,7 @@ window.EmailExtractor = class EmailExtractor {
                     console.log('Velocitas: Direct click extraction failed, content not sufficient');
                     return false;
                 }
-            }, 2000);
+            }, 1000); // Reduced from 2000ms
 
             return true; // Indicate we're trying this method
 
@@ -410,7 +410,7 @@ window.EmailExtractor = class EmailExtractor {
             setTimeout(() => {
                 window.scrollTo(0, originalScrollY);
                 this._markFirstEmailAsUnread();
-            }, 1000);
+            }, 500); // Reduced from 800ms
         } else {
             // Fallback: use browser back button
             window.history.back();
@@ -418,7 +418,7 @@ window.EmailExtractor = class EmailExtractor {
             setTimeout(() => {
                 window.scrollTo(0, originalScrollY);
                 this._markFirstEmailAsUnread();
-            }, 1000);
+            }, 500); // Reduced from 800ms
         }
     }
 
@@ -990,8 +990,8 @@ window.EmailExtractor = class EmailExtractor {
         
         // Wait for Gmail to load if needed
         if (!this._isGmailLoaded()) {
-            console.log('Velocitas: Gmail not fully loaded, retrying in 2 seconds...');
-            setTimeout(() => this.extractMultipleEmails(count), 2000);
+            console.log('Velocitas: Gmail not fully loaded, retrying in 1 second...');
+            setTimeout(() => this.extractMultipleEmails(count), 1000);
             return null;
         }
 
@@ -1112,10 +1112,8 @@ window.EmailExtractor = class EmailExtractor {
     // Direct click extraction for sequential processing
     _tryDirectClickExtractionSequential(emailData, allEmailsData) {
         try {
-            // Save original state
             const originalScrollY = window.scrollY;
 
-            // Create a natural click event
             const clickEvent = new MouseEvent('click', {
                 view: window,
                 bubbles: true,
@@ -1126,33 +1124,24 @@ window.EmailExtractor = class EmailExtractor {
                 buttons: 1
             });
 
-            // Click the email row to open it
             emailData.element.dispatchEvent(clickEvent);
 
-            // Wait for Gmail to potentially open the email
             setTimeout(() => {
                 const extractedContent = this._extractContentFromCurrentPage();
-                
+
                 if (extractedContent && extractedContent.body && extractedContent.body.trim().length > 50) {
-                    console.log(`Velocitas: Direct click extraction successful for email ${emailData.index}!`);
-                    
-                    // Store the extracted content
                     emailData.extractedContent = extractedContent;
                     this.multiEmailTracking.extractedEmails.push(emailData);
-                    
-                    // Return to inbox quickly
+
                     this._returnToInboxQuickly(originalScrollY, () => {
                         this._handleEmailProcessingComplete(true, emailData, allEmailsData);
                     });
-                    
                 } else {
-                    console.log(`Velocitas: Direct click extraction failed for email ${emailData.index}, trying URL navigation...`);
                     this._tryUrlNavigationExtractionSequential(emailData, allEmailsData);
                 }
-            }, 2000);
+            }, 500); // Reduced from 1000ms
 
         } catch (error) {
-            console.warn(`Velocitas: Direct click extraction failed for email ${emailData.index}:`, error);
             this._tryUrlNavigationExtractionSequential(emailData, allEmailsData);
         }
     }
@@ -1181,7 +1170,7 @@ window.EmailExtractor = class EmailExtractor {
         // Navigate to email
         setTimeout(() => {
             window.location.assign(emailUrl);
-        }, 1000 + Math.random() * 500); // Randomized delay
+        }, 500); // Reduced from 1000ms
     }
 
     // Handle completion of individual email processing
@@ -1202,7 +1191,7 @@ window.EmailExtractor = class EmailExtractor {
         // Small delay before processing next email to be gentle on Gmail
         setTimeout(() => {
             this._processNextEmail(allEmailsData);
-        }, 1500);
+        }, 1000); // Reduced from 1500ms
     }
 
     // Quick return to inbox for sequential processing
@@ -1217,14 +1206,14 @@ window.EmailExtractor = class EmailExtractor {
             setTimeout(() => {
                 window.scrollTo(0, originalScrollY);
                 if (callback) callback();
-            }, 800);
+            }, 500); // Reduced from 800ms
         } else {
             // Fallback: use browser back button
             window.history.back();
             setTimeout(() => {
                 window.scrollTo(0, originalScrollY);
                 if (callback) callback();
-            }, 800);
+            }, 500); // Reduced from 800ms
         }
     }
 
@@ -1315,7 +1304,7 @@ window.EmailExtractor = class EmailExtractor {
                         if (callback) callback();
                     }, 1000);
                 }
-            }, index * 300); // Longer stagger for better success rate
+            }, index * 200); // Reduced stagger from 300ms
         });
     }
 

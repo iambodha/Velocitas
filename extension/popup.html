@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <style>
     body {
-      width: 200px;
+      width: 220px;
       padding: 16px;
       font-family: system-ui, sans-serif;
       background: white;
@@ -21,6 +21,62 @@
       align-items: center;
       gap: 8px;
       font-size: 14px;
+      margin-bottom: 12px;
+    }
+    
+    .cache-section {
+      border-top: 1px solid #eee;
+      padding-top: 12px;
+      margin-top: 12px;
+    }
+    
+    .cache-info {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 8px;
+    }
+    
+    button {
+      background: #dc3545;
+      color: white;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      width: 100%;
+      margin-bottom: 8px;
+    }
+    
+    button:hover {
+      background: #c82333;
+    }
+    
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    
+    .summary-btn {
+      background: #28a745;
+    }
+    
+    .summary-btn:hover {
+      background: #218838;
+    }
+    
+    .refresh-btn {
+      background: #007bff;
+    }
+    
+    .refresh-btn:hover {
+      background: #0056b3;
+    }
+    
+    .unread-info {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 8px;
     }
   </style>
 </head>
@@ -32,14 +88,57 @@
     Enable Extension
   </label>
 
+  <div class="cache-section">
+    <div class="cache-info" id="cacheInfo">Cache: Loading...</div>
+    <button id="clearCache">Clear Cache</button>
+    <button id="refreshLabels" class="refresh-btn">🔄 Refresh Labels</button>
+    
+    <div class="unread-info" id="unreadInfo">Unread: Checking...</div>
+    <button id="summarizeEmails" class="summary-btn">📧 Summarize Unread</button>
+    
+    <div class="cache-info" id="individualSummaryInfo">Individual Summary: Checking...</div>
+    <button id="clearIndividualSummary" class="refresh-btn">🧹 Clear Current Summary</button>
+    <button id="clearIndividualCache">Clear Individual Cache</button>
+  </div>
+
   <script>
     const toggle = document.getElementById('toggle');
+    const cacheInfo = document.getElementById('cacheInfo');
+    const unreadInfo = document.getElementById('unreadInfo');
+    const individualSummaryInfo = document.getElementById('individualSummaryInfo');
+    const clearCacheBtn = document.getElementById('clearCache');
+    const summarizeBtn = document.getElementById('summarizeEmails');
+    const refreshLabelsBtn = document.getElementById('refreshLabels');
+    const clearIndividualSummaryBtn = document.getElementById('clearIndividualSummary');
+    const clearIndividualCacheBtn = document.getElementById('clearIndividualCache');
 
     // Load current status
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       chrome.tabs.sendMessage(tabs[0].id, { action: 'getStatus' }, (response) => {
         if (response) {
           toggle.checked = response.enabled;
+          
+          // Update cache info
+          if (response.cacheSize !== undefined) {
+            cacheInfo.textContent = `Cache: ${response.cacheSize} emails`;
+          } else {
+            cacheInfo.textContent = 'Cache: Unknown';
+          }
+          
+          // Update unread info
+          if (response.summarizerStatus && response.summarizerStatus.unreadCount !== undefined) {
+            unreadInfo.textContent = `Unread: ${response.summarizerStatus.unreadCount} emails`;
+          } else {
+            unreadInfo.textContent = 'Unread: Unknown';
+          }
+          
+          // Update individual summary info
+          if (response.individualSummarizerStatus) {
+            const status = response.individualSummarizerStatus;
+            individualSummaryInfo.textContent = `Individual: ${status.cacheSize} cached, ${status.currentEmailId ? 'Active' : 'Inactive'}`;
+          } else {
+            individualSummaryInfo.textContent = 'Individual: Unknown';
+          }
         }
       });
     });
@@ -49,6 +148,129 @@
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         chrome.tabs.sendMessage(tabs[0].id, { action: 'toggle' }, (response) => {
           // Toggle handled
+        });
+      });
+    });
+
+    // Handle clear cache
+    clearCacheBtn.addEventListener('click', () => {
+      clearCacheBtn.disabled = true;
+      clearCacheBtn.textContent = 'Clearing...';
+      
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        chrome.tabs.sendMessage(tabs[0].id, { action: 'clearCache' }, (response) => {
+          if (response && response.success) {
+            cacheInfo.textContent = 'Cache: 0 emails';
+            clearCacheBtn.textContent = 'Cleared!';
+            setTimeout(() => {
+              clearCacheBtn.textContent = 'Clear Cache';
+              clearCacheBtn.disabled = false;
+            }, 2000);
+          } else {
+            clearCacheBtn.textContent = 'Error';
+            setTimeout(() => {
+              clearCacheBtn.textContent = 'Clear Cache';
+              clearCacheBtn.disabled = false;
+            }, 2000);
+          }
+        });
+      });
+    });
+
+    // Handle refresh labels
+    refreshLabelsBtn.addEventListener('click', () => {
+      refreshLabelsBtn.disabled = true;
+      refreshLabelsBtn.textContent = '🔄 Refreshing...';
+      
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        chrome.tabs.sendMessage(tabs[0].id, { action: 'refreshLabels' }, (response) => {
+          if (response && response.success) {
+            refreshLabelsBtn.textContent = '✅ Labels Refreshed';
+            setTimeout(() => {
+              refreshLabelsBtn.textContent = '🔄 Refresh Labels';
+              refreshLabelsBtn.disabled = false;
+            }, 2000);
+          } else {
+            refreshLabelsBtn.textContent = '❌ Error';
+            setTimeout(() => {
+              refreshLabelsBtn.textContent = '🔄 Refresh Labels';
+              refreshLabelsBtn.disabled = false;
+            }, 2000);
+          }
+        });
+      });
+    });
+
+    // Handle summarize emails
+    summarizeBtn.addEventListener('click', () => {
+      summarizeBtn.disabled = true;
+      summarizeBtn.textContent = '📧 Summarizing...';
+      
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        chrome.tabs.sendMessage(tabs[0].id, { action: 'summarizeEmails' }, (response) => {
+          if (response && response.success) {
+            summarizeBtn.textContent = '✅ Summary Generated';
+            setTimeout(() => {
+              summarizeBtn.textContent = '📧 Summarize Unread';
+              summarizeBtn.disabled = false;
+            }, 2000);
+          } else {
+            summarizeBtn.textContent = '❌ Error';
+            setTimeout(() => {
+              summarizeBtn.textContent = '📧 Summarize Unread';
+              summarizeBtn.disabled = false;
+            }, 2000);
+          }
+        });
+      });
+    });
+
+    // Handle clear individual summary
+    clearIndividualSummaryBtn.addEventListener('click', () => {
+      clearIndividualSummaryBtn.disabled = true;
+      clearIndividualSummaryBtn.textContent = '🧹 Clearing...';
+      
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        chrome.tabs.sendMessage(tabs[0].id, { action: 'clearIndividualSummary' }, (response) => {
+          if (response && response.success) {
+            individualSummaryInfo.textContent = 'Individual Summary: Cleared';
+            clearIndividualSummaryBtn.textContent = '✅ Cleared!';
+            setTimeout(() => {
+              clearIndividualSummaryBtn.textContent = '🧹 Clear Current Summary';
+              clearIndividualSummaryBtn.disabled = false;
+            }, 2000);
+          } else {
+            clearIndividualSummaryBtn.textContent = '❌ Error';
+            setTimeout(() => {
+              clearIndividualSummaryBtn.textContent = '🧹 Clear Current Summary';
+              clearIndividualSummaryBtn.disabled = false;
+            }, 2000);
+          }
+        });
+      });
+    });
+
+    // Handle clear individual cache
+    clearIndividualCacheBtn.addEventListener('click', () => {
+      clearIndividualCacheBtn.disabled = true;
+      clearIndividualCacheBtn.textContent = 'Clearing...';
+      
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        chrome.tabs.sendMessage(tabs[0].id, { action: 'clearIndividualCache' }, (response) => {
+          if (response && response.success) {
+            cacheInfo.textContent = 'Cache: 0 emails';
+            clearIndividualCacheBtn.textContent = '✅ Cleared!';
+            setTimeout(() => {
+              clearIndividualCacheBtn.textContent = 'Clear Individual Cache';
+              clearIndividualCacheBtn.disabled = false;
+            }, 2000);
+          } else {
+            clearIndividualCacheBtn.textContent = '❌ Error';
+            setTimeout(() => {
+              clearIndividualCacheBtn.textContent = 'Clear Individual Cache';
+              clearIndividualCacheBtn.disabled = false;
+            }, 2000);
+          }
         });
       });
     });

@@ -12,13 +12,17 @@
     function initializeExtension() {
         console.log('Velocitas: Checking module availability...');
         console.log('DateHeaderManager available:', !!window.DateHeaderManager);
-        console.log('EmailExtractor available:', !!window.EmailExtractor);
+        console.log('EmailLabeler available:', !!window.EmailLabeler);
+        console.log('EmailSummarizer available:', !!window.EmailSummarizer);
+        console.log('IndividualEmailSummarizer available:', !!window.IndividualEmailSummarizer);
+        console.log('EmailChatbox available:', !!window.EmailChatbox);
+        console.log('EmailReplyAssistant available:', !!window.EmailReplyAssistant);
         console.log('VelocitasExtension available:', !!window.VelocitasExtension);
         
-        // Check if all required classes are available
-        if (!window.DateHeaderManager || !window.EmailExtractor || !window.VelocitasExtension) {
+        // Check if required classes are available
+        if (!window.DateHeaderManager || !window.EmailLabeler || !window.EmailSummarizer || !window.IndividualEmailSummarizer || !window.EmailChatbox || !window.EmailReplyAssistant || !window.VelocitasExtension) {
             console.error('Velocitas: Required modules not loaded');
-            console.log('Available window properties:', Object.keys(window).filter(key => key.includes('Velocitas') || key.includes('DateHeader') || key.includes('EmailExtractor')));
+            console.log('Available window properties:', Object.keys(window).filter(key => key.includes('Velocitas') || key.includes('DateHeader') || key.includes('EmailLabeler') || key.includes('EmailSummarizer') || key.includes('IndividualEmail') || key.includes('EmailChatbox') || key.includes('EmailReply')));
             
             // Retry after a short delay in case modules are still loading
             setTimeout(() => {
@@ -45,7 +49,7 @@
                 }
             });
 
-            console.log('Velocitas: Extension initialized successfully with modular architecture');
+            console.log('Velocitas: Extension initialized successfully with AI email labeling, summarization, and chatbox');
         } catch (initError) {
             console.error('Velocitas: Failed to create extension instance:', initError);
         }

@@ -15,9 +15,6 @@ body.velocitas-modern-theme a[aria-label="Support"] {
     display: none !important;
 }
 
-body.velocitas-modern-theme a[aria-label="Settings"] {
-    display: none !important;
-}
 
 body.velocitas-modern-theme .bAw.bcf.tRcrsc { /* Side panel (Calendar, Keep, Tasks) */
     display: none !important;
@@ -30,13 +27,7 @@ body.velocitas-modern-theme .brC-aT5-aOt-Jw { /* Side panel container */
 /* Consider if you want to hide the main navigation or restyle it.
    For a "Next.js vibe", often navigation is minimalist but present.
    If you want to see it, comment out these lines. */
-body.velocitas-modern-theme .aeN.WR.baA.nH.oy8Mbf.bhZ { /* Left sidebar/navigation panel */
-    display: none !important;
-}
 
-body.velocitas-modern-theme div[role="navigation"].aeN { /* Left navigation container */
-    display: none !important;
-}
 
 body.velocitas-modern-theme div[id=":4"].aeH, /* Email toolbar */
 body.velocitas-modern-theme .aeH .D.E.G-atb, /* Email toolbar container */
@@ -46,18 +37,6 @@ body.velocitas-modern-theme .nH.aqK /* Email management toolbar */ {
 
 body.velocitas-modern-theme .gb_J.gb_dd.gb_0, /* Google apps menu (9-dot grid) */
 body.velocitas-modern-theme a[aria-label="Google apps"] {
-    display: none !important;
-}
-
-body.velocitas-modern-theme .gb_Lc, /* Hamburger menu */
-body.velocitas-modern-theme div[aria-label="Main menu"] {
-    display: none !important;
-}
-
-/* Search bar - consider restyling instead of hiding for a modern UI */
-body.velocitas-modern-theme .gb_xe, /* Hide search bar container */
-body.velocitas-modern-theme form[role="search"],
-body.velocitas-modern-theme .gb_jd.gb_bf.bas.aJf {
     display: none !important;
 }
 
@@ -101,19 +80,6 @@ body.velocitas-modern-theme .yO {
 }
 body.velocitas-modern-theme .xS { /* Snippet text */
     color: #555 !important;
-}
-
-/* Modernize Compose Button (if it becomes visible or you re-enable parts of toolbar) */
-body.velocitas-modern-theme div[gh="cm"] { /* Common selector for Compose button */
-  background-color: #FFD700 !important; /* Gold */
-  color: #333333 !important; /* Dark text for contrast */
-  border-radius: 20px !important;
-  padding: 10px 20px !important;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
-  transition: background-color 0.2s ease !important;
-}
-body.velocitas-modern-theme div[gh="cm"]:hover {
-  background-color: #FFC107 !important; /* Darker Gold/Amber */
 }
 
 /* --- Icon Overrides (Illustrative Examples) --- */
